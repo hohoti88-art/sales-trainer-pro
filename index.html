@@ -8,6 +8,53 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Sales Trainer Pro</title>
+
+    <!-- Open Graph (카카오톡 링크 미리보기) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Sales Trainer Pro" />
+    <meta property="og:description" content="AI와 함께 세일즈 실력을 한 단계 끌어올리세요" />
+    <meta property="og:image" content="https://sales-trainer-35z2u2wy8-hohoti88-arts-projects.vercel.app/og-image.svg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:url" content="https://sales-trainer-35z2u2wy8-hohoti88-arts-projects.vercel.app/" />
+    <meta property="og:site_name" content="Sales Trainer Pro" />
+
+    <!-- 카카오톡 인앱 브라우저 → 외부 브라우저 강제 오픈 -->
+    <script>
+      (function () {
+        var ua = navigator.userAgent || '';
+        var isKakao = /KAKAOTALK/i.test(ua);
+        if (!isKakao) return;
+
+        var url = location.href;
+        if (/android/i.test(ua)) {
+          // Android: intent:// 스킴으로 시스템 브라우저 강제 실행
+          var stripped = url.replace(/^https?:\/\//, '');
+          var scheme = url.startsWith('https') ? 'https' : 'http';
+          location.href =
+            'intent://' + stripped +
+            '#Intent;scheme=' + scheme +
+            ';action=android.intent.action.VIEW' +
+            ';category=android.intent.category.BROWSABLE' +
+            ';end';
+        } else {
+          // iOS: Safari로 이동 유도 (document.write로 버튼 표시)
+          document.addEventListener('DOMContentLoaded', function () {
+            var div = document.createElement('div');
+            div.style.cssText =
+              'position:fixed;top:0;left:0;right:0;bottom:0;background:#1e293b;display:flex;' +
+              'flex-direction:column;align-items:center;justify-content:center;z-index:9999;font-family:sans-serif;';
+            div.innerHTML =
+              '<p style="color:#f59e0b;font-size:20px;font-weight:900;margin-bottom:8px;">Sales Trainer Pro</p>' +
+              '<p style="color:#94a3b8;font-size:14px;margin-bottom:32px;">Safari에서 열어야 음성 기능을 사용할 수 있습니다</p>' +
+              '<a href="' + url + '" target="_blank" rel="noopener noreferrer" ' +
+              'style="background:#f59e0b;color:#1e293b;padding:14px 32px;border-radius:12px;' +
+              'font-weight:700;font-size:16px;text-decoration:none;">Safari로 열기</a>';
+            document.body.appendChild(div);
+          });
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

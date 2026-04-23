@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e293b"/>
+      <stop offset="100%" style="stop-color:#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#fbbf24"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 배경 -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- 좌측 골드 강조선 -->
+  <rect x="0" y="0" width="8" height="630" fill="url(#accent)"/>
+
+  <!-- 배경 장식 원 -->
+  <circle cx="1050" cy="120" r="220" fill="#334155" opacity="0.3"/>
+  <circle cx="980" cy="500" r="140" fill="#334155" opacity="0.2"/>
+
+  <!-- AI 배지 -->
+  <rect x="80" y="170" width="190" height="40" rx="20" fill="#f59e0b" opacity="0.15"/>
+  <rect x="80" y="170" width="190" height="40" rx="20" fill="none" stroke="#f59e0b" stroke-width="1.5" opacity="0.6"/>
+  <text x="175" y="196" font-family="Arial, sans-serif" font-size="16" font-weight="600" fill="#fbbf24" text-anchor="middle">AI 기반 세일즈 트레이닝</text>
+
+  <!-- 메인 타이틀 -->
+  <text x="80" y="300" font-family="Arial, sans-serif" font-size="82" font-weight="900" fill="white" letter-spacing="-2">Sales Trainer</text>
+  <text x="80" y="390" font-family="Arial, sans-serif" font-size="82" font-weight="900" fill="url(#accent)" letter-spacing="-2">Pro</text>
+
+  <!-- 서브타이틀 -->
+  <text x="80" y="460" font-family="Arial, sans-serif" font-size="28" fill="#94a3b8" letter-spacing="0.5">AI와 함께 세일즈 실력을 한 단계 끌어올리세요</text>
+
+  <!-- 기능 태그들 -->
+  <rect x="80" y="510" width="150" height="36" rx="18" fill="#1d4ed8" opacity="0.8"/>
+  <text x="155" y="533" font-family="Arial, sans-serif" font-size="15" fill="white" text-anchor="middle">화법 연습</text>
+
+  <rect x="246" y="510" width="150" height="36" rx="18" fill="#059669" opacity="0.8"/>
+  <text x="321" y="533" font-family="Arial, sans-serif" font-size="15" fill="white" text-anchor="middle">전화 연습</text>
+
+  <rect x="412" y="510" width="170" height="36" rx="18" fill="#7c3aed" opacity="0.8"/>
+  <text x="497" y="533" font-family="Arial, sans-serif" font-size="15" fill="white" text-anchor="middle">업셀링 전략</text>
+
+  <rect x="598" y="510" width="170" height="36" rx="18" fill="#b45309" opacity="0.8"/>
+  <text x="683" y="533" font-family="Arial, sans-serif" font-size="15" fill="white" text-anchor="middle">고객 확대</text>
+
+  <!-- 우측 아이콘 영역 -->
+  <circle cx="1020" cy="280" r="130" fill="#f59e0b" opacity="0.08"/>
+  <circle cx="1020" cy="280" r="100" fill="#f59e0b" opacity="0.06"/>
+  <text x="1020" y="310" font-family="Arial, sans-serif" font-size="90" text-anchor="middle" dominant-baseline="middle">🏆</text>
+</svg>

@@ -26,7 +26,11 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp}'],
+        // HTML은 캐시하지 않음 — 항상 서버에서 최신 HTML을 받아 JS 번들 해시가 갱신됨
+        // 이전: html 포함 → 구버전 JS가 서비스워커 캐시에서 계속 제공되는 문제
+        globPatterns: ['**/*.{js,css,ico,png,svg,webp}'],
+        navigateFallback: 'index.html',
+        navigateFallbackDenylist: [/^\/api/],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

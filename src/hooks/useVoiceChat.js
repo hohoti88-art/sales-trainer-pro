@@ -1,14 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useVoiceInput } from './useVoiceInput';
 import { speak, stopSpeaking } from '../services/ttsService';
-import { correctVoiceTranscript } from '../services/geminiService';
 
-/**
- * 화법연습·전화연습 공통 음성 대화 로직
- * - TTS 모드: 마이크 ON 후 대화가 자동으로 계속 이어짐
- * - 음성 교정: 고유명사(회사명·상품명) 오인식 자동 수정
- * - 이중 발화 방지: activeRef 가드 + pause/resume 메커니즘
- */
 export function useVoiceChat({ chatRef, product, profile, personality, ttsStorageKey, defaultTts = false }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -21,15 +14,14 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
 
   const ttsEnabledRef = useRef(ttsEnabled);
   const sendMessageRef = useRef(null);
+  const processingRef = useRef(false); // 동시 sendMessage 호출 차단 (React state보다 빠른 동기 가드)
 
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
 
-  // 음성 인식 결과 → TTS 모드면 자동 전송, 아니면 입력창에 세팅
   const handleVoiceResult = useCallback((text) => {
-    if (ttsEnabledRef.current && sendMessageRef.current) {
+    // TTS ON/OFF 무관하게 항상 sendMessage — 음성 입력은 항상 자동 전송
+    if (sendMessageRef.current) {
       sendMessageRef.current(text);
-    } else {
-      setInput(text);
     }
   }, []);
 
@@ -56,10 +48,11 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
     });
   }
 
-  // TTS ON이면 재생 후 마이크 재개, OFF면 즉시 마이크 재개
   function speakThenResume(text) {
     if (ttsEnabledRef.current) {
-      speak(text, personality, profile, () => resumeMic());
+      // 300ms 대기 후 speak — recognition.stop() 완전 종료 보장
+      // onEnd에 500ms 딜레이 — TTS 잔향이 마이크에 잡혀 에코 루프 방지
+      setTimeout(() => speak(text, personality, profile, () => setTimeout(resumeMic, 500)), 300);
     } else {
       resumeMic();
     }
@@ -68,7 +61,8 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   async function sendMessage(text) {
     const isFromVoice = !!text;
     const rawMsg = text?.trim() || input.trim();
-    if (!rawMsg || loading) return;
+    if (!rawMsg || processingRef.current) return; // processingRef: React state보다 빠른 중복 차단
+    processingRef.current = true;
 
     setInput('');
     stopSpeaking();
@@ -78,24 +72,14 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
     try {
       let userMsg = rawMsg;
 
-      if (isFromVoice) {
-        // 고유명사 교정과 자연스러운 대기를 병렬 실행 (추가 지연 없음)
-        const context = `판매 상품: ${product}, 고객 프로필: ${profile}`;
-        const [corrected] = await Promise.all([
-          Promise.race([
-            correctVoiceTranscript(rawMsg, context),
-            new Promise(r => setTimeout(() => r(rawMsg), 600)),
-          ]).catch(() => rawMsg),
-          new Promise(r => setTimeout(r, 400 + Math.random() * 400)),
-        ]);
-        userMsg = corrected;
-      }
+      // 발화 즉시 화면에 표시 (글자 멈춤 방지)
+      const msgId = Date.now();
+      setMessages(prev => [...prev, { role: 'user', text: rawMsg, _id: msgId }]);
 
-      setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+      setMessages(prev => prev.map(m => m._id === msgId ? { ...m, _id: undefined } : m));
 
       const result = await chatRef.current.sendMessage(userMsg);
       const rawAi = result.response.text();
-      // 괄호 지문 제거: (속으로 생각: ...) 등 AI가 생성하는 무대 지시문 차단
       const aiText = rawAi
         .replace(/\([^)]*\)/g, '')
         .replace(/（[^）]*）/g, '')
@@ -103,18 +87,19 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
         .replace(/\s{2,}/g, ' ')
         .trim();
 
-      // 고객이 듣고 생각하는 자연스러운 텀
-      const delay = isFromVoice ? 150 + Math.random() * 200 : 400 + Math.random() * 400;
+      // 실제 사람이 듣고 생각하는 자연스러운 텀 (너무 빠르면 대화가 부자연스러움)
+      const delay = isFromVoice ? 800 + Math.random() * 600 : 600 + Math.random() * 500;
       await new Promise(r => setTimeout(r, delay));
 
       setMessages(prev => [...prev, { role: 'model', text: aiText }]);
 
-      speakThenResume(aiText); // TTS ON: 재생→마이크 재개 / OFF: 즉시 마이크 재개
+      speakThenResume(aiText);
     } catch (e) {
       setError('응답 오류: ' + e.message);
       resumeMic();
     } finally {
       setLoading(false);
+      processingRef.current = false;
     }
   }
 

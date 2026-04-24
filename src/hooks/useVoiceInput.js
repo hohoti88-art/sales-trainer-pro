@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
-const SILENCE_DELAY = 1500;
+// 모바일은 말 중간 쉬는 숨이 짧아도 끊기지 않도록 데스크탑보다 여유를 줌
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const SILENCE_DELAY = isMobile ? 2500 : 1500;
 
 export function useVoiceInput(onResult) {
   const [isListening, setIsListening] = useState(false);
@@ -8,19 +10,25 @@ export function useVoiceInput(onResult) {
   const recognitionRef = useRef(null);
   const silenceTimerRef = useRef(null);
   const accumulatedRef = useRef('');
-  const activeRef = useRef(false);   // 세션 활성 여부 (사용자가 마이크 ON 상태)
-  const pausedRef = useRef(false);   // TTS 재생 중 일시정지 여부
+  const activeRef = useRef(false);
+  const pausedRef = useRef(false);
   const onResultRef = useRef(onResult);
   const createAndStartRef = useRef(null);
+  const generationRef = useRef(0);
 
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
 
   const createAndStart = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
-      alert('음성 인식이 지원되지 않습니다. Chrome 또는 Edge를 사용해주세요.');
+      alert('음성 인식이 지원되지 않습니다. Chrome 또는 Safari를 사용해주세요.');
       return;
     }
+
+    const myGen = ++generationRef.current;
+    // Per-instance tracker: prevents same final result being accumulated twice.
+    // Some mobile Chrome versions fire onresult with the same resultIndex & isFinal=true twice.
+    let lastFinalIndex = -1;
 
     const recognition = new SR();
     recognition.lang = 'ko-KR';
@@ -29,29 +37,50 @@ export function useVoiceInput(onResult) {
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event) => {
-      // 핵심 수정: 세션이 종료된 후 Chrome이 늦게 보내는 이벤트 차단 → 중복 발화 방지
       if (!activeRef.current) return;
+      if (generationRef.current !== myGen) return;
+      if (pausedRef.current) return;
+
+      clearTimeout(silenceTimerRef.current);
 
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const r = event.results[i];
-        if (r.isFinal) accumulatedRef.current += r[0].transcript;
-        else interim += r[0].transcript;
+        if (r.isFinal) {
+          // Guard: only accumulate if this index hasn't been processed yet
+          if (i > lastFinalIndex) {
+            accumulatedRef.current += r[0].transcript;
+            lastFinalIndex = i;
+          }
+        } else {
+          interim += r[0].transcript;
+        }
       }
       setLiveText(accumulatedRef.current + interim);
 
-      clearTimeout(silenceTimerRef.current);
+      // Always use SILENCE_DELAY — never cut speech mid-sentence
       silenceTimerRef.current = setTimeout(() => {
-        const full = (accumulatedRef.current + interim).trim();
+        if (generationRef.current !== myGen) return;
+        if (pausedRef.current) return;
+        // Use accumulated (final) text if available; fall back to interim only if no final came.
+        // Never concatenate accumulated + interim — mobile Chrome echoes the last final segment
+        // as a new interim result, which doubles the text (e.g. "안녕하세요안녕하세요").
+        const full = accumulatedRef.current.trim() || interim.trim();
         accumulatedRef.current = '';
         setLiveText('');
-        if (full) onResultRef.current(full); // 콜백 호출 (sendMessage 등)
-        recognition.stop();
+        if (full) {
+          pausedRef.current = true;
+          recognition.stop();
+          onResultRef.current(full);
+        } else {
+          recognition.stop();
+        }
       }, SILENCE_DELAY);
     };
 
     recognition.onerror = (e) => {
       if (e.error === 'no-speech') return;
+      if (generationRef.current !== myGen) return;
       clearTimeout(silenceTimerRef.current);
       activeRef.current = false;
       pausedRef.current = false;
@@ -60,11 +89,12 @@ export function useVoiceInput(onResult) {
     };
 
     recognition.onend = () => {
-      // activeRef=true이고 pausedRef=false일 때만 재시작
-      // → Chrome 강제 종료 대응 O, TTS 중 일시정지 상태 재시작 X
+      if (generationRef.current !== myGen) return;
       if (activeRef.current && !pausedRef.current) {
         setTimeout(() => {
-          if (activeRef.current && !pausedRef.current) createAndStartRef.current?.();
+          if (activeRef.current && !pausedRef.current && generationRef.current === myGen) {
+            createAndStartRef.current?.();
+          }
         }, 100);
       }
     };
@@ -81,9 +111,9 @@ export function useVoiceInput(onResult) {
 
   createAndStartRef.current = createAndStart;
 
-  // 완전 종료 (마이크 버튼으로 OFF)
   const stop = useCallback(() => {
     clearTimeout(silenceTimerRef.current);
+    generationRef.current++;
     activeRef.current = false;
     pausedRef.current = false;
     recognitionRef.current?.stop();
@@ -92,7 +122,6 @@ export function useVoiceInput(onResult) {
     accumulatedRef.current = '';
   }, []);
 
-  // 세션 시작 (마이크 버튼으로 ON)
   const start = useCallback(() => {
     if (activeRef.current) return;
     accumulatedRef.current = '';
@@ -101,14 +130,12 @@ export function useVoiceInput(onResult) {
     createAndStart();
   }, [createAndStart]);
 
-  // TTS 재생 중 일시정지 (isListening 시각 상태 유지 — 마이크 버튼 계속 빨간색)
   const pause = useCallback(() => {
     pausedRef.current = true;
     clearTimeout(silenceTimerRef.current);
     recognitionRef.current?.stop();
   }, []);
 
-  // TTS 종료 후 재개 (세션이 없어도 강제 시작 — 채팅 시작 시 자동 마이크 ON)
   const resume = useCallback(() => {
     activeRef.current = true;
     pausedRef.current = false;

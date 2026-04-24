@@ -1,68 +1,70 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
-// ── continuous: false + 침묵 대기 누적 모드 ──────────────────
+// ── continuous:true + 침묵 타이머 누적 (v4 — 최종) ──────────────
 //
-// [이전 시도 실패 이유 — 절대 되돌리지 말 것]
+// ★ 반드시 읽고 수정할 것 — 이전 시도 실패 이력 ★
 //
-// ❌ continuous: true + SILENCE_DELAY (모바일 2200ms / 데스크탑 1400ms):
-//    → Chrome이 같은 isFinal 결과를 재시작마다 재전송 → 텍스트 N배 누적
-//    → VAD(Web Audio + 별도 getUserMedia) 추가했지만 경쟁 스트림이
-//      SpeechRecognition 재시작을 오히려 더 빈번하게 만듦
-//    → 커밋 3a54851, 5b1873a에서 실패 확인 후 폐기
+// ❌ v1 continuous:true (b958fbc):
+//    accumulatedRef + interim 표시 합산 → Chrome이 isFinal을 새 interim으로
+//    재전송 → "안녕하세요안녕하세요" 표시 중복
+//    Chrome 강제 종료 시 accumulatedRef 미초기화 → 새 세션이 같은 텍스트 누적
 //
-// ✅ 현재 방식 — continuous: false + 침묵 타이머 누적:
-//    - continuous: false → 1회 발화 후 Chrome이 자연 종료 (에코·중복 방지)
-//    - onend에서 즉시 제출하지 않고 accumulatedRef에 텍스트 누적
-//    - SILENCE_TIMEOUT(2000ms) 동안 추가 발화 없으면 제출
-//    - 추가 발화 감지 시 타이머 리셋 → 계속 누적
-//    - flushAccumulated에서 SR 즉시 중단 + generationRef 무효화 후 제출
-//      → TTS 시작 전 SR이 완전히 종료된 상태를 보장 (에코 근본 차단)
+// ❌ v2 VAD + continuous:true (3a54851):
+//    별도 getUserMedia 스트림이 SpeechRecognition과 경쟁 → 재시작 더 빈번
 //
-// [SILENCE_TIMEOUT 조정 이력]
-//   1500ms → 2000ms: 자연스러운 한국어 발화 텀 허용
-//   (continuous:true였던 과거와 달리 continuous:false에서는 타임아웃 증가가
-//    에코·중복을 유발하지 않음 — SR 세션이 단일 발화 단위로 독립 관리됨)
+// ❌ v3 continuous:false + 재시작 루프 (5b1873a → f73b9f3 → 현재):
+//    onend 후 200ms 재시작 시 오디오 버퍼 재처리 →
+//    세션 2가 세션 1의 발화를 다시 인식 → accumulatedRef 중복 누적 → 동결
+//
+// ✅ v4 원칙 (이 파일):
+//    1. continuous:true → Chrome이 발화 후에도 세션 유지 (불필요한 재시작 없음)
+//    2. event.resultIndex 루프 + lastProcessedIndex 가드 → isFinal 중복 방지
+//    3. 표시·제출 모두 accumulatedRef || interim (절대 합산 금지)
+//       → Chrome의 "isFinal→interim 재전송" 버그로 인한 중복 표시 차단
+//    4. Chrome 강제 종료 시(onend):
+//       - accumulatedRef 있으면 → 즉시 플러시(제출) 후 빈 상태로 재시작
+//       - accumulatedRef 없으면 → 빈 상태로 300ms 후 재시작
+//       → 새 세션은 항상 빈 accumulatedRef로 시작 → 버퍼 재처리해도 중복 없음
+//    5. flushAccumulated: generationRef++ + stop() 후 onResult → TTS 전 SR 완전 종료
 
-const SILENCE_TIMEOUT = 2000; // 발화 후 이 시간(ms) 동안 침묵하면 제출
+const SILENCE_TIMEOUT = 2000; // isFinal 마지막 감지 후 이 시간 침묵하면 제출
 
 export function useVoiceInput(onResult) {
   const [isListening, setIsListening] = useState(false);
   const [liveText, setLiveText]       = useState('');
 
-  const recognitionRef     = useRef(null);
-  const activeRef          = useRef(false);
-  const pausedRef          = useRef(false);
-  const onResultRef        = useRef(onResult);
-  const createAndStartRef  = useRef(null);
-  const generationRef      = useRef(0);
-  const finalTextRef       = useRef('');      // 현재 SR 세션의 isFinal 텍스트
-  const accumulatedRef     = useRef('');      // 여러 세션에 걸쳐 누적된 텍스트
-  const submitTimerRef     = useRef(null);    // 침묵 대기 타이머
-  const retryScheduledRef  = useRef(false);   // no-speech 재시작 중복 방지
+  const recognitionRef      = useRef(null);
+  const activeRef           = useRef(false);
+  const pausedRef           = useRef(false);
+  const onResultRef         = useRef(onResult);
+  const createAndStartRef   = useRef(null);
+  const generationRef       = useRef(0);
+  const accumulatedRef      = useRef('');   // isFinal 확정 텍스트 누적
+  const latestInterimRef    = useRef('');   // 최신 interim (침묵 시 폴백 제출용)
+  const submitTimerRef      = useRef(null); // 침묵 타이머
 
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
 
-  // 누적 텍스트를 제출하고 상태 초기화
-  // ★ SR을 즉시 중단 + generationRef 무효화 후 onResult 호출
-  //   → flushAccumulated → onResult → sendMessage → pauseMic 사이에
-  //     어떤 SR 세션도 실행되지 않음 (TTS 에코 근본 차단)
+  // 누적 텍스트 제출 + SR 즉시 중단
+  // generationRef++ → 대기 중인 모든 SR 콜백 무효화
+  // recognitionRef.stop() → TTS 시작 전 SR 완전 종료 보장
   const flushAccumulated = useCallback(() => {
     clearTimeout(submitTimerRef.current);
-    const text = accumulatedRef.current.trim();
-    accumulatedRef.current = '';
+    // accumulated 우선, 없으면 interim 폴백 (절대 합산 금지 — 중복 방지)
+    const text = accumulatedRef.current.trim() || latestInterimRef.current.trim();
+    accumulatedRef.current   = '';
+    latestInterimRef.current = '';
     setLiveText('');
     if (text && activeRef.current && !pausedRef.current) {
       pausedRef.current = true;
-      // 진행 중인 SR 세션 즉시 종료 + 대기 중인 재시작 콜백 무효화
-      generationRef.current++;
-      recognitionRef.current?.stop();
+      generationRef.current++;        // 진행 중인 SR 콜백 전부 무효화
+      recognitionRef.current?.stop(); // SR 즉시 중단
       recognitionRef.current = null;
       setIsListening(false);
       onResultRef.current(text);
     }
   }, []);
 
-  // 침묵 타이머 리셋 — 발화가 추가될 때마다 호출
   const resetSubmitTimer = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     submitTimerRef.current = setTimeout(flushAccumulated, SILENCE_TIMEOUT);
@@ -76,53 +78,53 @@ export function useVoiceInput(onResult) {
     }
 
     const myGen = ++generationRef.current;
-    finalTextRef.current   = '';
-    retryScheduledRef.current = false;
+    let lastProcessedIndex = -1; // 세션 내 isFinal 중복 방지
+    latestInterimRef.current = '';
 
     const recognition = new SR();
     recognition.lang            = 'ko-KR';
-    recognition.continuous      = false;  // 1회 발화 후 자동 종료 (에코·중복 방지)
-    recognition.interimResults  = true;   // 실시간 텍스트 표시
+    recognition.continuous      = true;   // ★ 세션 유지 → 재시작 없음 → 버퍼 재처리 없음
+    recognition.interimResults  = true;
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event) => {
       if (!activeRef.current || generationRef.current !== myGen || pausedRef.current) return;
 
       let interim = '';
-      let final   = '';
-      for (let i = 0; i < event.results.length; i++) {
-        if (event.results[i].isFinal) final   += event.results[i][0].transcript;
-        else                          interim += event.results[i][0].transcript;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          // lastProcessedIndex 가드: 같은 인덱스 isFinal 중복 처리 방지
+          if (i > lastProcessedIndex) {
+            lastProcessedIndex = i;
+            const t = event.results[i][0].transcript;
+            accumulatedRef.current = accumulatedRef.current
+              ? accumulatedRef.current + ' ' + t
+              : t;
+            latestInterimRef.current = '';
+            resetSubmitTimer(); // isFinal 감지마다 침묵 타이머 리셋
+          }
+        } else {
+          interim += event.results[i][0].transcript;
+        }
       }
 
-      if (final) {
-        finalTextRef.current = final;
-        setLiveText((accumulatedRef.current ? accumulatedRef.current + ' ' : '') + final);
-      } else {
-        setLiveText((accumulatedRef.current ? accumulatedRef.current + ' ' : '') + interim);
-      }
+      latestInterimRef.current = interim;
+
+      // ★ 표시: accumulated || interim (절대 합산 금지)
+      // Chrome이 isFinal 텍스트를 새 interim으로 재전송하는 버그 대응
+      setLiveText(accumulatedRef.current || interim);
     };
 
     recognition.onerror = (e) => {
       if (generationRef.current !== myGen) return;
-
-      if (e.error === 'no-speech') {
-        // 발화 없음 → 누적 텍스트가 있으면 타이머가 제출
-        // 없으면 새 세션 시작해서 계속 대기
-        if (activeRef.current && !pausedRef.current) {
-          retryScheduledRef.current = true;
-          setTimeout(() => {
-            if (activeRef.current && !pausedRef.current && generationRef.current === myGen) {
-              createAndStartRef.current?.();
-            }
-          }, 200);
-        }
-        return;
-      }
+      // no-speech: 발화 대기 중 → 무시 (continuous 모드에서 타이머가 관리)
+      // aborted: 우리가 stop() 호출 → 무시
+      if (e.error === 'no-speech' || e.error === 'aborted') return;
 
       // 그 외 오류 → 완전 정지
       clearTimeout(submitTimerRef.current);
-      accumulatedRef.current = '';
+      accumulatedRef.current   = '';
+      latestInterimRef.current = '';
       activeRef.current  = false;
       pausedRef.current  = false;
       recognitionRef.current = null;
@@ -134,36 +136,23 @@ export function useVoiceInput(onResult) {
       if (generationRef.current !== myGen) return;
       recognitionRef.current = null;
 
-      const text = finalTextRef.current.trim();
-      finalTextRef.current = '';
+      // flushAccumulated 또는 pause/stop이 이미 처리한 경우
+      if (pausedRef.current || !activeRef.current) return;
 
-      if (text && !pausedRef.current) {
-        // 새 발화 감지 → 누적 후 침묵 타이머 리셋
-        accumulatedRef.current = accumulatedRef.current
-          ? accumulatedRef.current + ' ' + text
-          : text;
-
-        // 타이머 리셋: SILENCE_TIMEOUT 동안 추가 발화 없으면 제출
-        resetSubmitTimer();
-
-        // 계속 듣기 — 추가 발화 대기 (200ms: 이전 세션 완전 종료 후 재시작)
-        if (activeRef.current && !pausedRef.current) {
-          setTimeout(() => {
-            if (activeRef.current && !pausedRef.current) {
-              createAndStartRef.current?.();
-            }
-          }, 200);
-        }
-        return;
-      }
-
-      // 이번 세션에 발화 없음 (no-speech 또는 자연 종료)
-      if (activeRef.current && !pausedRef.current && !retryScheduledRef.current) {
+      // Chrome이 세션을 강제 종료한 경우
+      if (accumulatedRef.current.trim()) {
+        // ★ 누적 텍스트 있음 → 즉시 제출
+        // 새 세션은 빈 accumulatedRef로 시작 → 버퍼 재처리해도 중복 없음
+        flushAccumulated();
+      } else {
+        // 누적 없음 → 빈 상태로 재시작 (300ms: 오디오 버퍼 안정화)
+        accumulatedRef.current   = '';
+        latestInterimRef.current = '';
         setTimeout(() => {
           if (activeRef.current && !pausedRef.current && generationRef.current === myGen) {
             createAndStartRef.current?.();
           }
-        }, 150);
+        }, 300);
       }
     };
 
@@ -175,7 +164,7 @@ export function useVoiceInput(onResult) {
       activeRef.current = false;
       setIsListening(false);
     }
-  }, [resetSubmitTimer]);
+  }, [resetSubmitTimer, flushAccumulated]);
 
   createAndStartRef.current = createAndStart;
 
@@ -183,11 +172,15 @@ export function useVoiceInput(onResult) {
 
   const stop = useCallback(() => {
     clearTimeout(submitTimerRef.current);
-    generationRef.current++;          // 진행 중인 모든 콜백 무효화
-    activeRef.current    = false;
-    pausedRef.current    = false;
-    finalTextRef.current = '';
-    accumulatedRef.current = '';
+    generationRef.current++;
+    activeRef.current        = false;
+    pausedRef.current        = false;
+    accumulatedRef.current   = '';
+    latestInterimRef.current = '';
     recognitionRef.current?.stop();
-    recognitionRef.current = null;
-    setIsL
+    recognitionRef.current   = null;
+    setIsListening(false);
+    setLiveText('');
+  }, []);
+
+  const start = useCallback(() => {

@@ -4,7 +4,7 @@ import NavBar from '../NavBar';
 import FeedbackModal from '../FeedbackModal';
 import { generateCallScript, startPersonaChat, generateFeedback } from '../../services/geminiService';
 import { useVoiceChat } from '../../hooks/useVoiceChat';
-import { playRingTone } from '../../services/ttsService';
+import { playRingTone, unlockAudio } from '../../services/ttsService';
 import { MicButton, SendButton, TtsButton, Bubble, ThinkingBubble } from '../menu1/SpeechPractice';
 
 const PERSONALITIES = ['까다로운형', '바쁜형', '친절한형', '의심형', '직접입력'];
@@ -50,11 +50,10 @@ export default function CallPractice() {
     return () => clearInterval(timerRef.current);
   }, [step]);
 
-  const prevLen = useRef(0);
-  if (messages.length !== prevLen.current) {
-    prevLen.current = messages.length;
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-  }
+  useEffect(() => {
+    const t = setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+    return () => clearTimeout(t);
+  }, [messages]);
 
   const formatTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
@@ -77,6 +76,7 @@ export default function CallPractice() {
   }
 
   async function handleStartCall() {
+    unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
     setStartLoading(true);
     try {
       const chat = await startPersonaChat(form.product, form.profile + ' (1~2문장으로 짧게 응답)', personality, form.painPoints, 'call');

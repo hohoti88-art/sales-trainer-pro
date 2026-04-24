@@ -1,10 +1,10 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Send, User, Bot, Loader2, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
 import NavBar from '../NavBar';
 import FeedbackModal from '../FeedbackModal';
 import { startPersonaChat, generateFeedback } from '../../services/geminiService';
 import { useVoiceChat } from '../../hooks/useVoiceChat';
-import { speak } from '../../services/ttsService';
+import { speak, unlockAudio } from '../../services/ttsService';
 
 const PERSONALITIES = ['까다로운형', '바쁜형', '친절한형', '의심형', '직접입력'];
 
@@ -35,22 +35,22 @@ export default function SpeechPractice() {
     profile: form.profile,
     personality,
     ttsStorageKey: 'sales_tts_enabled',
-    defaultTts: false,
+    defaultTts: true,
   });
 
-  // 메시지 추가될 때마다 스크롤
+  // 메시지 추가될 때마다 스크롤 (useEffect로 DOM 업데이트 후 실행 보장)
   const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  const prevLen = useRef(0);
-  if (messages.length !== prevLen.current) {
-    prevLen.current = messages.length;
-    setTimeout(scrollToBottom, 50);
-  }
+  useEffect(() => {
+    const t = setTimeout(scrollToBottom, 100);
+    return () => clearTimeout(t);
+  }, [messages]);
 
   async function handleStart() {
     if (!form.product.trim() || !form.profile.trim()) {
       setStartError('판매 상품명과 고객 프로필을 입력해주세요.');
       return;
     }
+    unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
     setStartLoading(true);
     setStartError('');
     try {

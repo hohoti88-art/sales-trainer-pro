@@ -8,8 +8,12 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
+      // ★ selfDestroying: true — 기존 서비스워커를 강제 삭제
+      // 서비스워커 캐시가 구버전 JS를 계속 제공하는 문제를 영구 해결
+      // 브라우저가 새 SW를 받으면 즉시 자신을 unregister하고 캐시를 삭제함
+      // → 이후 모든 방문은 Vercel에서 직접 최신 파일을 받음
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png', 'og-image.png'],
+      selfDestroying: true,
       manifest: {
         name: 'Sales Trainer Pro',
         short_name: '세일즈 트레이너',
@@ -23,20 +27,6 @@ export default defineConfig({
         icons: [
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
-        ],
-      },
-      workbox: {
-        // HTML은 캐시하지 않음 — 항상 서버에서 최신 HTML을 받아 JS 번들 해시가 갱신됨
-        // 이전: html 포함 → 구버전 JS가 서비스워커 캐시에서 계속 제공되는 문제
-        globPatterns: ['**/*.{js,css,ico,png,svg,webp}'],
-        navigateFallback: 'index.html',
-        navigateFallbackDenylist: [/^\/api/],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: { cacheName: 'google-fonts-cache', expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 } },
-          },
         ],
       },
     }),

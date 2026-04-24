@@ -51,8 +51,8 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   function speakThenResume(text) {
     if (ttsEnabledRef.current) {
       // 300ms 대기 후 speak — recognition.stop() 완전 종료 보장
-      // onEnd에 500ms 딜레이 — TTS 잔향이 마이크에 잡혀 에코 루프 방지
-      setTimeout(() => speak(text, personality, profile, () => setTimeout(resumeMic, 500)), 300);
+      // onEnd 후 1000ms 대기 — <audio> AEC가 정착할 시간 + 잔향 소멸 여유
+      setTimeout(() => speak(text, personality, profile, () => setTimeout(resumeMic, 1000)), 300);
     } else {
       resumeMic();
     }

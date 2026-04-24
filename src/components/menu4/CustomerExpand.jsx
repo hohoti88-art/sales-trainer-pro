@@ -8,7 +8,7 @@ const PAGES = [
   { id: 'customerExpansion', emoji: '👥', label: '고객층 확대',       step: '1 / 4', color: 'blue' },
   { id: 'productChange',     emoji: '📦', label: '상품 변화 아이디어', step: '2 / 4', color: 'purple' },
   { id: 'salesMethod',       emoji: '🔀', label: '판매 방법 변화',     step: '3 / 4', color: 'emerald' },
-  { id: 'realCases',         emoji: '🏢', label: '실제 기업 사례',     step: '4 / 4', color: 'amber' },
+  { id: 'realCases',         emoji: '🏆', label: '실제 세일즈 사례',   step: '4 / 4', color: 'amber' },
 ];
 
 const ACCENT = {
@@ -248,19 +248,19 @@ function PageSalesMethod({ data, a }) {
   );
 }
 
-// ── 페이지 4: 실제 기업 사례 ──────────────────────────────
+// ── 페이지 4: 실제 세일즈 사례 ───────────────────────────
 function PageRealCases({ data, a }) {
   if (!data) return null;
   const cases = data.realCases || [];
   return (
     <>
       {cases.length === 0 ? (
-        <div className="text-slate-400 text-sm text-center py-8">기업 사례 데이터가 없습니다.</div>
+        <div className="text-slate-400 text-sm text-center py-8">세일즈 사례 데이터가 없습니다.</div>
       ) : (
         cases.map((c, i) => (
           <div key={i} className={`bg-white border ${a.card} rounded-xl p-4`}>
             <div className="flex items-center gap-2 mb-3">
-              <span className={`${a.tag} text-xs font-bold px-2 py-0.5 rounded-full`}>성공 사례</span>
+              <span className={`${a.tag} text-xs font-bold px-2 py-0.5 rounded-full`}>세일즈 사례</span>
               <span className={`${a.sub} font-bold text-sm`}>{c.company}</span>
             </div>
             {c.product && (

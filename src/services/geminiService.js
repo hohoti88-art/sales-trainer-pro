@@ -1,55 +1,76 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-
-function getClient() {
-  if (!API_KEY || API_KEY === 'your_api_key_here') {
-    throw new Error('Gemini API 키가 설정되지 않았습니다. .env 파일에 VITE_GEMINI_API_KEY를 설정해주세요.');
+async function callProxy(body) {
+  const res = await fetch('/api/gemini', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `API error ${res.status}`);
   }
-  return new GoogleGenerativeAI(API_KEY);
+  return res.json();
 }
 
 export async function startPersonaChat(product, customerProfile, personality, painPoints, mode = 'visit') {
-  const genAI = getClient();
   const situationRule = mode === 'call'
     ? '이것은 전화 영업 연습입니다. 첫 응답은 반드시 전화를 받는 상황으로 시작하세요 (예: "여보세요?", "네, 말씀하세요.", "네, 누구세요?").'
     : '이것은 방문 대면 영업 연습입니다. 첫 응답은 반드시 방문객을 맞이하는 상황으로 시작하세요 (예: "어떤 일로 오셨습니까?", "무슨 일이세요?", "어서 오세요, 무슨 용건이신가요?").';
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    systemInstruction: `당신은 세일즈 트레이닝을 위한 가상 고객입니다.
-고객 프로필: ${customerProfile}
-성격 유형: ${personality}
-현재 고객의 애로사항: ${painPoints}
+
+  const systemInstruction = `당신은 세일즈 트레이닝용 가상 고객입니다.
+
+[고객 정보]
+프로필: ${customerProfile}
+성격: ${personality}
+현재 고민·애로사항: ${painPoints}
 판매 상품: ${product}
 
-역할 수행 규칙:
-1. 반드시 한국어로만 대화하세요.
-2. 위 프로필에 맞는 현실적인 고객처럼 행동하세요.
-3. 성격 유형별 초기 태도:
-   - 까다로운형: 트집을 잡고 날카롭게 질문하지만, 논리적으로 납득되면 "그 부분은 그렇군요" 식으로 조금씩 인정
-   - 바쁜형: 처음엔 귀찮아하지만, 핵심을 짧게 잘 전달하면 "그게 뭔데요?" 하며 관심을 보임
-   - 친절한형: 호의적이지만 신중. 공감을 잘 받으면 "사실 그 부분이 좀 걸렸는데..." 하며 속내를 꺼냄
-   - 의심형: 근거와 증거를 요구하지만, 구체적 데이터나 사례를 제시하면 "그 사례 좀 더 얘기해보세요" 하며 열림
-4. 태도 변화 곡선을 반드시 따르세요:
-   - 초반(1~3턴): 방어적·거부적 반응
-   - 중반(4~6턴): 세일즈맨이 애로사항을 정확히 짚거나 공감하면 "그건 맞는 말이네요", "음, 그 부분은..." 식으로 조금씩 마음이 열림
-   - 후반(7턴~): 관심 표현 또는 조건부 검토 ("한번 자료 보내줘 봐요", "가격이 맞으면 생각해볼게요" 등)
-   - 단, 세일즈맨이 엉뚱한 대응을 하거나 고객 입장을 무시하면 다시 닫힘
-5. 절대로 단순 거절만 반복하지 마세요. 거절하더라도 이유를 말하고, 세일즈맨에게 다음 기회를 줄 수 있는 여지를 남기세요.
-6. 구매 결정은 쉽게 내리지 마세요. 하지만 "가능성 있음"의 신호는 대화 흐름에 따라 자연스럽게 보내세요.
-7. 짧고 자연스러운 대화체로 응답하세요 (2~4문장 이내).
-8. ${situationRule}
-9. 절대로 괄호() 안에 어떤 내용도 쓰지 마세요. '속으로 생각', 행동 묘사, 상황 설명, 감정 서술 일체 금지. 오직 실제 말(대사)만 출력하세요.`,
-  });
+[가장 중요한 원칙 — 반드시 지키세요]
+당신은 현실적인 비즈니스 대표입니다. 바쁘고 신중하지만, 본인 회사에 도움이 된다면 충분히 열릴 의향이 있는 사람입니다.
+절대로 처음부터 끝까지 적대적·공격적으로 굴지 마세요. 그것은 비현실적입니다.
+세일즈맨이 합리적인 말을 하면 반드시 그에 맞게 반응하세요.
 
-  const chat = model.startChat({ history: [] });
-  return chat;
+[태도 변화 — 이 순서를 자연스럽게 따르세요]
+● 1~2턴 (경계): 바쁜 척, 필요 없다는 식. 단, 무례하거나 싸우듯 말하지 말 것. 예: "지금 좀 바쁜데요", "그런 거 관심 없어요"
+● 3~4턴 (흔들림): 세일즈맨이 내 애로사항(${painPoints})을 정확히 짚으면 반응이 바뀜. 예: "음... 그 부분은 사실 저도 좀 고민이긴 해요", "그게 어떻게 해결이 된다는 건가요?"
+● 5~6턴 (관심): 구체적 설명이나 수치가 나오면 질문하기 시작. 예: "실제로 다른 회사는 어떻게 됐어요?", "비용이 얼마나 들어요?"
+● 7턴~ (조건부 검토): 신중하지만 열린 태도. 예: "자료 한번 보내줘 봐요", "우리 쪽 상황이랑 맞으면 검토해볼게요"
+
+[성격별 말투]
+- 까다로운형: 날카롭게 질문하지만, 납득되면 "그 부분은 인정해요" 식으로 인정함
+- 바쁜형: 짧고 빠르게 말함. 관심이 생기면 "짧게만 얘기해봐요"라며 기회를 줌
+- 친절한형: 거절도 부드럽게. 관심이 생기면 "사실 그 부분이 저도 좀 걸렸거든요"라며 속내를 꺼냄
+- 의심형: 데이터·증거를 요구함. 제시되면 "그 근거 좀 더 얘기해봐요"라며 열림
+
+[절대 하지 말아야 할 것]
+- 매 턴마다 "필요 없어요", "됐어요"로만 끝내는 것 → 비현실적입니다
+- 세일즈맨이 좋은 말을 해도 무시하고 계속 거부만 하는 것 → 현실에서 없습니다
+- 적대적·싸우는 어투, 반말, 무시하는 말투 → 비즈니스 대표는 이렇게 말하지 않습니다
+- 괄호() 안에 생각·행동·설명을 넣는 것 → 오직 실제 말(대사)만 출력하세요
+- 비서·직원·제3자 역할 → 당신은 항상 대표 본인입니다. 전화를 받는 것도, 방문객을 맞이하는 것도 대표가 직접 합니다. 비서나 다른 인물이 등장하거나 "잠시만요, 연결해드리겠습니다" 식으로 제3자를 끼워 넣지 마세요
+
+[형식]
+- 반드시 한국어만 사용
+- 2~3문장 이내의 짧고 자연스러운 구어체
+- ${situationRule}`;
+
+  const chatHistory = [];
+
+  return {
+    sendMessage: async (userMessage) => {
+      const data = await callProxy({
+        action: 'chat',
+        systemInstruction,
+        history: chatHistory,
+        message: userMessage,
+      });
+      chatHistory.push({ role: 'user', parts: [{ text: userMessage }] });
+      chatHistory.push({ role: 'model', parts: [{ text: data.text }] });
+      return { response: { text: () => data.text } };
+    },
+  };
 }
 
 export async function generateFeedback(chatHistory) {
-  const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
   const historyText = chatHistory
     .map(m => `${m.role === 'user' ? '세일즈맨' : '고객'}: ${m.text}`)
     .join('\n');
@@ -94,16 +115,12 @@ ${historyText}
   ]
 }`;
 
-  const result = await model.generateContent(prompt);
-  let text = result.response.text().trim();
-  text = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  const data = await callProxy({ action: 'generate', prompt });
+  let text = data.text.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
   return JSON.parse(text);
 }
 
 export async function generateCallScript(product, customerProfile, personality, painPoints) {
-  const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
   const prompt = `다음 정보를 바탕으로 전화 영업(TA) 스크립트를 작성해주세요.
 
 판매 상품: ${product}
@@ -130,26 +147,21 @@ export async function generateCallScript(product, customerProfile, personality, 
 
 실제 사용 가능한 자연스러운 한국어 구어체로 작성해주세요.`;
 
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  const data = await callProxy({ action: 'generate', prompt });
+  return data.text;
 }
 
 export async function correctVoiceTranscript(rawText, context) {
-  const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  const result = await model.generateContent(
-    `음성인식 오류 수정 전문가입니다. 아래 문맥을 참고해 음성인식 텍스트에서 잘못 인식된 고유명사(회사명·브랜드명·상품명·지명·인명)만 교정하세요. 일반 단어나 문법은 절대 바꾸지 마세요. 수정된 텍스트만 반환하세요 (설명 없이).
+  const prompt = `음성인식 오류 수정 전문가입니다. 아래 문맥을 참고해 음성인식 텍스트에서 잘못 인식된 고유명사(회사명·브랜드명·상품명·지명·인명)만 교정하세요. 일반 단어나 문법은 절대 바꾸지 마세요. 수정된 텍스트만 반환하세요 (설명 없이).
 문맥: ${context}
-음성인식 텍스트: ${rawText}`
-  );
-  const corrected = result.response.text().trim().replace(/^["']|["']$/g, '');
+음성인식 텍스트: ${rawText}`;
+
+  const data = await callProxy({ action: 'generate', prompt });
+  const corrected = data.text.trim().replace(/^["']|["']$/g, '');
   return corrected || rawText;
 }
 
 export async function generateUpsellStrategy(product, customersText, industry = '기타') {
-  const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
   const prompt = `당신은 현장 영업 전문가입니다. 아래 정보를 바탕으로 개인 세일즈맨이 현장에서 즉시 실행할 수 있는 매출 확대 전략을 작성하세요. 기업 단위 전략이 아니라 세일즈맨 개인이 고객에게 말하고 행동하는 방식으로 작성하세요.
 
 판매 상품: "${product}"
@@ -186,16 +198,12 @@ export async function generateUpsellStrategy(product, customersText, industry = 
   }
 }`;
 
-  const result = await model.generateContent(prompt);
-  let text = result.response.text().trim();
-  text = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  const data = await callProxy({ action: 'generate', prompt });
+  let text = data.text.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
   return JSON.parse(text);
 }
 
 export async function generateCustomerExpansion(product, currentCustomers, channelsText) {
-  const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
   const prompt = `당신은 현장 영업 코치입니다. 모든 내용은 개인 세일즈맨 입장에서, 현장에서 즉시 실행할 수 있는 행동과 말로 작성하세요. 기업 단위 전략(마케팅 캠페인, 조직 개편 등)은 절대 쓰지 마세요.
 
 판매 상품: ${product}
@@ -242,20 +250,19 @@ export async function generateCustomerExpansion(product, currentCustomers, chann
     ],
     "realCases": [
       {
-        "company": "실존 세일즈맨 또는 기업가 이름 (예: 조 지라드, 우노 다카시, 자이언트 조 등)",
-        "product": "그 사람이 팔았던 상품/업종",
-        "before": "기존 방식 또는 어려움",
-        "after": "독창적 접근으로 거둔 성과",
-        "lesson": "현재 상품(${product}) 세일즈에 적용할 수 있는 구체적 교훈 (단순 참고가 아닌 실행 가능한 연결점)"
+        "company": "실존 세일즈맨 이름 — 반드시 실제로 실적·저서·인터뷰로 검증된 세계적 세일즈 전설을 선택하세요 (예: 조 지라드·기네스북 역대 최다 자동차 판매, 우노 다카시·일본 최고 요리사 겸 서비스 달인, 프랭크 베트거·보험왕, 론 포펄·TV홈쇼핑 판매왕, 브라이언 트레이시·세일즈 코치, 데이비드 오길비·광고 세일즈, 마크 큐반·창업 세일즈 등). 반드시 판매 상품(${product})과 연결할 수 있는 인물을 선택하세요.",
+        "product": "그 사람이 실제로 팔았던 상품/업종",
+        "before": "그가 극복한 초기 어려움 또는 기존의 평범한 방식",
+        "after": "그만의 독창적 접근으로 이룬 구체적 성과 (숫자·기록 포함)",
+        "lesson": "이 세일즈맨의 핵심 방식을 현재 상품(${product}) 세일즈에 즉시 적용하는 구체적 행동 (단순 참고가 아닌 '내일 당장 실천할 수 있는' 연결점)"
       },
-      {"company": "...", "product": "...", "before": "...", "after": "...", "lesson": "..."},
-      {"company": "...", "product": "...", "before": "...", "after": "...", "lesson": "..."}
+      {"company": "두 번째 실존 세일즈 전설 (첫 번째와 다른 업종·국가)", "product": "...", "before": "...", "after": "...", "lesson": "..."},
+      {"company": "세 번째 실존 세일즈 전설 (한국인 세일즈 고수 포함 가능: 현장 보험·자동차·부동산 등)", "product": "...", "before": "...", "after": "...", "lesson": "..."}
     ]
   }
 }`;
 
-  const result = await model.generateContent(prompt);
-  let text = result.response.text().trim();
-  text = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  const data = await callProxy({ action: 'generate', prompt });
+  let text = data.text.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
   return JSON.parse(text);
 }

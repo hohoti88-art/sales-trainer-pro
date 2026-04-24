@@ -8,6 +8,12 @@ const PERSONALITY_SETTINGS = {
 const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+// ── TTS 재생 중 여부 추적 ─────────────────────────────────
+// useVoiceChat의 resumeMic()는 이 플래그가 false가 될 때까지 폴링 대기.
+// 모바일에서 utterance.onend가 실제 재생 종료 전에 조기 발화되는 문제를 보완함.
+let _isSpeaking = false;
+export function getIsSpeaking() { return _isSpeaking; }
+
 // <audio> element — plays through OS audio output pipeline.
 // The browser's AEC (Acoustic Echo Cancellation) uses the OS output as its reference
 // signal, so SpeechRecognition mic input is automatically subtracted from this audio.
@@ -101,7 +107,19 @@ function speakWebSpeech(cleaned, personality, gender, safeEnd) {
   // Estimate based on text length — Web Speech has no reliable duration API
   const estimatedMs = Math.min(Math.max(cleaned.length * 80, 3000), 25000) + 3000;
   const fallbackTimer = setTimeout(safeEnd, estimatedMs);
-  utterance.onend = () => { clearTimeout(fallbackTimer); safeEnd(); };
+
+  // 모바일(Android Chrome)은 utterance.onend가 실제 재생 완료 전에 조기 발화하는 버그가 있음.
+  // 700ms 추가 대기 후 safeEnd() → resumeMic이 스피커 잔향을 잡지 않도록 방지.
+  // 데스크탑은 지연 없이 즉시 호출 (기존 동작 유지).
+  const fireEnd = () => {
+    clearTimeout(fallbackTimer);
+    if (isMobile) {
+      setTimeout(safeEnd, 700);
+    } else {
+      safeEnd();
+    }
+  };
+  utterance.onend = fireEnd;
   utterance.onerror = () => { clearTimeout(fallbackTimer); safeEnd(); };
 
   const doSpeak = () => {
@@ -135,8 +153,15 @@ function speakWebSpeech(cleaned, personality, gender, safeEnd) {
 
 // ── 공개 API ─────────────────────────────────────────────
 export function speak(text, personality = '친절한형', profile = '', onEnd = null) {
+  _isSpeaking = true; // 재생 시작 마킹
+
   let ended = false;
-  const safeEnd = () => { if (ended) return; ended = true; if (onEnd) onEnd(); };
+  const safeEnd = () => {
+    if (ended) return;
+    ended = true;
+    _isSpeaking = false; // 재생 완료 마킹 — useVoiceChat 폴링이 이 값을 확인
+    if (onEnd) onEnd();
+  };
 
   const cleaned = cleanText(text);
   if (!cleaned) { safeEnd(); return; }
@@ -149,6 +174,7 @@ export function speak(text, personality = '친절한형', profile = '', onEnd = 
 }
 
 export function stopSpeaking() {
+  _isSpeaking = false; // 강제 중단 시 즉시 초기화
   if (currentAudioEl) {
     currentAudioEl.pause();
     currentAudioEl.src = '';

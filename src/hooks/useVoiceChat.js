@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useVoiceInput } from './useVoiceInput';
-import { speak, stopSpeaking } from '../services/ttsService';
+import { speak, stopSpeaking, getIsSpeaking } from '../services/ttsService';
+
+// 모바일 여부 — speakThenResume의 resumeMic 지연 및 폴링 전략에 사용
+const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 export function useVoiceChat({ chatRef, product, profile, personality, ttsStorageKey, defaultTts = false }) {
   const [messages, setMessages] = useState([]);
@@ -15,6 +18,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   const ttsEnabledRef = useRef(ttsEnabled);
   const sendMessageRef = useRef(null);
   const processingRef = useRef(false); // 동시 sendMessage 호출 차단 (React state보다 빠른 동기 가드)
+  const processingTimeoutRef = useRef(null); // 안전 타임아웃 핸들
 
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
 
@@ -48,11 +52,27 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
     });
   }
 
+  // ── speakThenResume ───────────────────────────────────────
+  // TTS 재생이 완전히 끝난 뒤에만 마이크를 재개한다.
+  // [데스크탑] safeEnd() → 800ms 후 resumeMic() — 기존 동작 유지
+  // [모바일]  safeEnd() 후 getIsSpeaking() 폴링(300ms 간격)으로 실제 종료 재확인
+  //           → false 확인 후 1000ms 추가 대기 → resumeMic() (잔향 소멸 여유)
   function speakThenResume(text) {
     if (ttsEnabledRef.current) {
-      // 300ms 대기 후 speak — recognition.stop() 완전 종료 보장
-      // onEnd 후 1000ms 대기 — <audio> AEC가 정착할 시간 + 잔향 소멸 여유
-      setTimeout(() => speak(text, personality, profile, () => setTimeout(resumeMic, 1000)), 300);
+      setTimeout(() => speak(text, personality, profile, () => {
+        if (isMobileDevice) {
+          const pollAndResume = () => {
+            if (getIsSpeaking()) {
+              setTimeout(pollAndResume, 300);
+            } else {
+              setTimeout(resumeMic, 1000);
+            }
+          };
+          setTimeout(pollAndResume, 100);
+        } else {
+          setTimeout(resumeMic, 800);
+        }
+      }), 300);
     } else {
       resumeMic();
     }
@@ -63,6 +83,17 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
     const rawMsg = text?.trim() || input.trim();
     if (!rawMsg || processingRef.current) return; // processingRef: React state보다 빠른 중복 차단
     processingRef.current = true;
+
+    // 안전 타임아웃: 네트워크 오류 등으로 processingRef가 영구 잠금되는 것을 방지
+    clearTimeout(processingTimeoutRef.current);
+    processingTimeoutRef.current = setTimeout(() => {
+      if (processingRef.current) {
+        processingRef.current = false;
+        setLoading(false);
+        setError('응답 시간이 초과되었습니다. 다시 시도해주세요.');
+        resumeMic();
+      }
+    }, 30000);
 
     setInput('');
     stopSpeaking();
@@ -98,6 +129,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
       setError('응답 오류: ' + e.message);
       resumeMic();
     } finally {
+      clearTimeout(processingTimeoutRef.current);
       setLoading(false);
       processingRef.current = false;
     }

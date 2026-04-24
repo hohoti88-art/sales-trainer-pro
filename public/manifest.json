@@ -1,0 +1,25 @@
+{
+  "name": "Sales Trainer Pro",
+  "short_name": "세일즈 트레이너",
+  "description": "AI와 함께 세일즈 실력을 한 단계 끌어올리세요",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1e293b",
+  "theme_color": "#1e293b",
+  "lang": "ko",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

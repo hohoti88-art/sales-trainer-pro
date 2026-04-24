@@ -4,7 +4,6 @@ import SpeechPractice from './components/menu1/SpeechPractice';
 import CallPractice from './components/menu2/CallPractice';
 import UpsellStrategy from './components/menu3/UpsellStrategy';
 import CustomerExpand from './components/menu4/CustomerExpand';
-
 export default function App() {
   return (
     <BrowserRouter>

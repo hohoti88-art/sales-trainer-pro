@@ -131,7 +131,7 @@ export default function HomeScreen() {
         )}
 
         <p className="text-center text-slate-400 text-xs mt-6">
-          Powered by Google Gemini AI · v7
+          Powered by Google Gemini AI · v8
         </p>
       </div>
     </div>

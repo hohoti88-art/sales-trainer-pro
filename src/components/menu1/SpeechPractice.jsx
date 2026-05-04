@@ -56,7 +56,8 @@ export default function SpeechPractice() {
     try {
       const chat = await startPersonaChat(form.product, form.profile, personality, form.painPoints);
       chatRef.current = chat;
-      const result = await chat.sendMessage('안녕하세요, 저는 영업사원입니다. 잠깐 시간 괜찮으신가요?');
+      // 고객이 먼저 말 걸도록 중립 트리거 — UI에 표시되지 않음
+      const result = await chat.sendMessage('[시작: 방문객이 들어왔습니다. 고객으로서 먼저 말을 걸어주세요]');
       const aiText = result.response.text();
       setMessages([{ role: 'model', text: aiText }]);
       setStep('chat');
@@ -159,7 +160,7 @@ export default function SpeechPractice() {
           <MicButton isListening={isListening} onClick={toggleMic} />
           <input
             className="flex-1 border border-slate-300 rounded-xl px-4 py-3 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-sm"
-            placeholder={isListening ? '🎤 말씀하세요...' : '메시지를 입력하거나 마이크를 누르세요'}
+            placeholder={isListening ? (liveText ? '' : '듣고 있습니다...') : '메시지를 입력하거나 마이크를 누르세요'}
             value={isListening ? liveText : input}
             onChange={e => { if (!isListening) setInput(e.target.value); }}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}

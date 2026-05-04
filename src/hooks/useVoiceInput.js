@@ -151,8 +151,10 @@ export function useVoiceInput(onResult) {
         });
         if (!res.ok) throw new Error(`STT ${res.status}`);
         const { text } = await res.json();
+        setLiveText(''); // 메시지 전송 직전 입력창 클리어
         onResultRef.current?.((text?.trim()) || fallbackText || '');
       } catch {
+        setLiveText('');
         if (fallbackText) onResultRef.current?.(fallbackText);
       } finally {
         isTranscribingRef.current = false;
@@ -171,7 +173,9 @@ export function useVoiceInput(onResult) {
     accumulatedRef.current   = '';
     latestInterimRef.current = '';
     lastAddedTextRef.current = '';
-    setLiveText('');
+    // [v11] liveText를 즉시 지우지 않음 — Whisper 변환 중에도 말한 내용이 입력창에 유지됨
+    // sendToWhisper가 onResult 호출 후 setLiveText('')로 정리
+    if (text) setLiveText(text); else setLiveText('');
     if (text && activeRef.current && !pausedRef.current) {
       lastSubmittedTextRef.current = text;
       lastSubmittedTimeRef.current = Date.now();

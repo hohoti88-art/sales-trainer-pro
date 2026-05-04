@@ -81,7 +81,8 @@ export default function CallPractice() {
     try {
       const chat = await startPersonaChat(form.product, form.profile + ' (1~2문장으로 짧게 응답)', personality, form.painPoints, 'call');
       chatRef.current = chat;
-      const result = await chat.sendMessage('여보세요?');
+      // 고객이 전화를 받는 상황으로 먼저 시작 — UI에 표시되지 않음
+      const result = await chat.sendMessage('[시작: 전화가 연결되었습니다. 고객으로서 전화를 받아주세요]');
       const aiText = result.response.text();
       setMessages([{ role: 'model', text: aiText }]);
       setStep('call');
@@ -222,7 +223,7 @@ export default function CallPractice() {
           <MicButton isListening={isListening} onClick={toggleMic} />
           <input
             className="flex-1 border border-slate-300 rounded-xl px-4 py-3 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all text-sm"
-            placeholder={isListening ? '🎤 말씀하세요...' : '메시지를 입력하거나 마이크를 누르세요'}
+            placeholder={isListening ? (liveText ? '' : '듣고 있습니다...') : '메시지를 입력하거나 마이크를 누르세요'}
             value={isListening ? liveText : input}
             onChange={e => { if (!isListening) setInput(e.target.value); }}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}

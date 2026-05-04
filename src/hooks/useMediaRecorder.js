@@ -1,33 +1,30 @@
-// useMediaRecorder.js v4
+// useMediaRecorder.js v5
 //
-// Silence detection — 3-zone hysteresis:
+// Root cause of premature cutoff (found after v4 still failed):
+//   Every recording session called getUserMedia() → new stream.
+//   On mobile, the 2nd getUserMedia triggers AGC/noise-suppression re-init.
+//   During ~800ms init window the signal is near-zero → silence zone arms
+//   immediately → timer fires way too early.
 //
-//   Zone A  rms >= SPEECH_THRESHOLD (20)   : definite speech
-//             → hasSpokenRef=true, reset silence debounce & timer
-//   Zone B  SILENCE_THRESHOLD < rms < 20   : ambient noise / breath
-//             → reset silence debounce & timer (keeps talking window open)
-//   Zone C  rms <= SILENCE_THRESHOLD (5)   : true silence
-//             → start debounce; after SILENCE_LEADING_MS (1200ms) of
-//               *consecutive* true silence, arm SILENCE_DURATION (5000ms) timer
+// Fix: open the stream ONCE (from the first user-gesture call) and keep it
+// alive for the entire conversation.  Only release on explicit fullStop().
 //
-// Total minimum lag from last word to auto-send: 1200 + 5000 = 6.2 seconds.
-// Any sound in Zone A or B resets the debounce, so mid-sentence pauses
-// (keyboard, breath, room noise) will NOT trigger the timer.
+//   cancel()    — stop MediaRecorder, keep stream alive
+//   _doStop()   — stop MediaRecorder, run Whisper, keep stream alive
+//   fullStop()  — cancel() + releaseStream()   (called by useVoiceInput.stop)
 //
-// Key change from v3: autoGainControl disabled.
-//   With autoGainControl:true the browser compresses gain immediately after
-//   speech, making the post-speech signal drop to near-zero and falsely enter
-//   Zone C. Disabling it keeps a stable noise floor so Zone B absorbs ambient
-//   sounds reliably.
+// Silence detection — 3-zone hysteresis (unchanged from v4):
+//   Zone A  rms >= 20   : speech  → reset silence debounce/timer
+//   Zone B  5 < rms < 20: ambient → reset silence debounce/timer
+//   Zone C  rms <= 5    : silence → after 1.2 s debounce, arm 5 s timer
 
 import { useState, useRef, useCallback } from 'react';
 
-const SPEECH_THRESHOLD   = 20;   // RMS ≥ this  → Zone A (speech)
-const SILENCE_THRESHOLD  = 5;    // RMS ≤ this  → Zone C (true silence)
-                                  // between    → Zone B (ambient / breath)
-const SILENCE_LEADING_MS = 1200; // consecutive Zone-C ms before arming timer
-const SILENCE_DURATION   = 5000; // timer duration once armed  (5 s, user-requested)
-const MIN_RECORD_MS      = 800;  // ignore silence zones for first 800 ms
+const SPEECH_THRESHOLD   = 20;
+const SILENCE_THRESHOLD  = 5;
+const SILENCE_LEADING_MS = 1200;
+const SILENCE_DURATION   = 5000;
+const MIN_RECORD_MS      = 800;
 
 function getSupportedMimeType() {
   const candidates = [
@@ -52,7 +49,7 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
 
   const mediaRecorderRef  = useRef(null);
   const chunksRef         = useRef([]);
-  const streamRef         = useRef(null);
+  const streamRef         = useRef(null);   // ← persists across sessions
   const mimeTypeRef       = useRef('');
   const audioCtxRef       = useRef(null);
   const analyserRef       = useRef(null);
@@ -61,7 +58,7 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
   const hasSpokenRef      = useRef(false);
   const startTimeRef      = useRef(0);
   const stoppingRef       = useRef(false);
-  const silenceStartRef   = useRef(null); // when Zone C began (for debounce)
+  const silenceStartRef   = useRef(null);
 
   const setRecording = useCallback((val) => {
     isRecordingRef.current = val;
@@ -73,6 +70,7 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
     setIsTranscribing(val);
   }, []);
 
+  // Releases microphone stream — call only on full stop (end of conversation).
   const releaseStream = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
@@ -83,7 +81,7 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
   const releaseAudioCtx = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
     clearTimeout(silenceTimerRef.current);
-    rafRef.current         = null;
+    rafRef.current          = null;
     silenceTimerRef.current = null;
     silenceStartRef.current = null;
     try { audioCtxRef.current?.close(); } catch {}
@@ -104,7 +102,7 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
     }
 
     recorder.onstop = async () => {
-      releaseStream();
+      // Stream intentionally NOT released here — reused by next startRecording().
       setRecording(false);
 
       const chunks = chunksRef.current;
@@ -142,7 +140,7 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
     };
 
     recorder.stop();
-  }, [releaseAudioCtx, releaseStream, getContextPrompt, onResult, onError, setRecording, setTranscribing]);
+  }, [releaseAudioCtx, getContextPrompt, onResult, onError, setRecording, setTranscribing]);
 
   const startSilenceDetection = useCallback((stream) => {
     try {
@@ -175,26 +173,13 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
         const elapsed = Date.now() - startTimeRef.current;
 
         if (rms >= SPEECH_THRESHOLD) {
-          // ── Zone A: clear speech ─────────────────────────────────────────
           hasSpokenRef.current = true;
           resetSilence();
-
         } else if (rms > SILENCE_THRESHOLD) {
-          // ── Zone B: ambient noise / breath / keyboard ────────────────────
-          // Any non-trivial sound in this range clears the silence debounce.
-          // This prevents mid-sentence pauses (even quiet ones) from arming
-          // the send-timer.
-          if (hasSpokenRef.current) {
-            resetSilence();
-          }
-
+          if (hasSpokenRef.current) resetSilence();
         } else {
-          // ── Zone C: true silence (rms <= SILENCE_THRESHOLD) ──────────────
-          // Silence must persist SILENCE_LEADING_MS before the send-timer arms.
           if (hasSpokenRef.current && elapsed > MIN_RECORD_MS) {
-            if (!silenceStartRef.current) {
-              silenceStartRef.current = Date.now();
-            }
+            if (!silenceStartRef.current) silenceStartRef.current = Date.now();
             const led = Date.now() - silenceStartRef.current;
             if (led >= SILENCE_LEADING_MS && !silenceTimerRef.current) {
               silenceTimerRef.current = setTimeout(() => { _doStop(); }, SILENCE_DURATION);
@@ -217,20 +202,23 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
     startTimeRef.current    = Date.now();
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation:  true,   // keep — prevents TTS echo on mic
-          noiseSuppression:  true,   // keep — cleaner audio for Whisper
-          autoGainControl:   false,  // OFF — AGC compresses signal after speech,
-                                     //       making post-speech audio falsely appear
-                                     //       as Zone C (true silence)
-        },
-      });
+      // Reuse existing stream if alive — avoids repeated getUserMedia on mobile.
+      // Mobile browsers re-init AGC/noise-suppression on every new getUserMedia,
+      // causing ~800ms of near-zero signal that falsely arms the silence timer.
+      if (!streamRef.current) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl:  false, // OFF — prevents post-speech gain drop
+          },
+        });
+        streamRef.current = stream;
+        mimeTypeRef.current = getSupportedMimeType();
+      }
 
-      streamRef.current = stream;
-
-      const mimeType = getSupportedMimeType();
-      mimeTypeRef.current = mimeType;
+      const stream   = streamRef.current;
+      const mimeType = mimeTypeRef.current;
 
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
       mediaRecorderRef.current = recorder;
@@ -243,13 +231,12 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
       setRecording(true);
       startSilenceDetection(stream);
     } catch (err) {
-      releaseStream();
       const msg = err.name === 'NotAllowedError'
-        ? 'Microphone permission required. Please allow microphone access in browser settings.'
+        ? 'Microphone permission required.'
         : 'Could not start microphone: ' + err.message;
       onError?.(msg);
     }
-  }, [releaseStream, startSilenceDetection, onError, setRecording]);
+  }, [startSilenceDetection, onError, setRecording]);
 
   const stopRecording = useCallback(() => { _doStop(); }, [_doStop]);
 
@@ -258,7 +245,8 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
     else startRecording();
   }, [startRecording, stopRecording]);
 
-  // Hard cancel — stops recording without sending to Whisper.
+  // Soft cancel — stop recorder WITHOUT releasing the stream.
+  // Used by pause() between AI turns so the stream stays warm for resume().
   const cancel = useCallback(() => {
     releaseAudioCtx();
     const recorder = mediaRecorderRef.current;
@@ -266,15 +254,25 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
       recorder.onstop = null;
       recorder.stop();
     }
-    releaseStream();
-    chunksRef.current       = [];
-    hasSpokenRef.current    = false;
-    silenceStartRef.current = null;
-    stoppingRef.current     = false;
+    mediaRecorderRef.current = null;
+    chunksRef.current        = [];
+    hasSpokenRef.current     = false;
+    silenceStartRef.current  = null;
+    stoppingRef.current      = false;
     setRecording(false);
-  }, [releaseAudioCtx, releaseStream, setRecording]);
+  }, [releaseAudioCtx, setRecording]);
 
-  return { isRecording, isTranscribing, toggle, startRecording, stopRecording, cancel };
+  // Full stop — cancel + release stream. Call when conversation ends (stop()).
+  const fullStop = useCallback(() => {
+    cancel();
+    releaseStream();
+  }, [cancel, releaseStream]);
+
+  return {
+    isRecording, isTranscribing,
+    toggle, startRecording, stopRecording,
+    cancel, fullStop,
+  };
 }
 
 function blobToBase64(blob) {

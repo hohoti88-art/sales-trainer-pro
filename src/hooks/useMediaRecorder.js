@@ -1,24 +1,33 @@
-// useMediaRecorder.js v3
-// Hysteresis silence detection: SPEECH_THRESHOLD / SILENCE_THRESHOLD separated.
+// useMediaRecorder.js v4
 //
-// Root cause of premature cutoff in v2:
-//   Single SILENCE_THRESHOLD=8 served dual purpose — both detecting speech AND silence.
-//   Ambient noise (RMS ~10-15) set hasSpokenRef=true immediately.
-//   Any brief dip below 8 (between words) started the 5s timer.
+// Silence detection — 3-zone hysteresis:
 //
-// Fix: two thresholds + a minimum silence-frame count before timer starts.
-//   SPEECH_THRESHOLD=20  → only clear speech sets hasSpokenRef (filters ambient noise)
-//   SILENCE_THRESHOLD=8  → only true quiet triggers the silence timer
-//   Band [8-20]          → ambient noise: clears any running silence timer, does NOT set hasSpokenRef
-//   SILENCE_LEADING_MS   → consecutive silence must last this long before timer begins (debounce)
+//   Zone A  rms >= SPEECH_THRESHOLD (20)   : definite speech
+//             → hasSpokenRef=true, reset silence debounce & timer
+//   Zone B  SILENCE_THRESHOLD < rms < 20   : ambient noise / breath
+//             → reset silence debounce & timer (keeps talking window open)
+//   Zone C  rms <= SILENCE_THRESHOLD (5)   : true silence
+//             → start debounce; after SILENCE_LEADING_MS (1200ms) of
+//               *consecutive* true silence, arm SILENCE_DURATION (5000ms) timer
+//
+// Total minimum lag from last word to auto-send: 1200 + 5000 = 6.2 seconds.
+// Any sound in Zone A or B resets the debounce, so mid-sentence pauses
+// (keyboard, breath, room noise) will NOT trigger the timer.
+//
+// Key change from v3: autoGainControl disabled.
+//   With autoGainControl:true the browser compresses gain immediately after
+//   speech, making the post-speech signal drop to near-zero and falsely enter
+//   Zone C. Disabling it keeps a stable noise floor so Zone B absorbs ambient
+//   sounds reliably.
 
 import { useState, useRef, useCallback } from 'react';
 
-const SPEECH_THRESHOLD   = 20;   // RMS above this = definite speech
-const SILENCE_THRESHOLD  = 8;    // RMS below this = true silence
-const SILENCE_DURATION   = 6000; // ms of true silence before auto-send
-const MIN_RECORD_MS      = 800;  // ignore silence detection for first 800ms
-const SILENCE_LEADING_MS = 400;  // silence must persist >=400ms before timer starts
+const SPEECH_THRESHOLD   = 20;   // RMS ≥ this  → Zone A (speech)
+const SILENCE_THRESHOLD  = 5;    // RMS ≤ this  → Zone C (true silence)
+                                  // between    → Zone B (ambient / breath)
+const SILENCE_LEADING_MS = 1200; // consecutive Zone-C ms before arming timer
+const SILENCE_DURATION   = 5000; // timer duration once armed  (5 s, user-requested)
+const MIN_RECORD_MS      = 800;  // ignore silence zones for first 800 ms
 
 function getSupportedMimeType() {
   const candidates = [
@@ -35,8 +44,8 @@ function getSupportedMimeType() {
 }
 
 export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
-  const [isRecording,     setIsRecording]     = useState(false);
-  const [isTranscribing,  setIsTranscribing]  = useState(false);
+  const [isRecording,    setIsRecording]    = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
 
   const isRecordingRef    = useRef(false);
   const isTranscribingRef = useRef(false);
@@ -52,7 +61,7 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
   const hasSpokenRef      = useRef(false);
   const startTimeRef      = useRef(0);
   const stoppingRef       = useRef(false);
-  const silenceStartRef   = useRef(null); // timestamp when silence zone entered
+  const silenceStartRef   = useRef(null); // when Zone C began (for debounce)
 
   const setRecording = useCallback((val) => {
     isRecordingRef.current = val;
@@ -74,7 +83,7 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
   const releaseAudioCtx = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
     clearTimeout(silenceTimerRef.current);
-    rafRef.current        = null;
+    rafRef.current         = null;
     silenceTimerRef.current = null;
     silenceStartRef.current = null;
     try { audioCtxRef.current?.close(); } catch {}
@@ -142,12 +151,18 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
 
       const ctx      = new AudioCtx();
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048; // larger buffer → smoother RMS, fewer false spikes
+      analyser.fftSize = 2048;
       ctx.createMediaStreamSource(stream).connect(analyser);
 
       audioCtxRef.current = ctx;
       analyserRef.current = analyser;
       const data = new Uint8Array(analyser.frequencyBinCount);
+
+      const resetSilence = () => {
+        silenceStartRef.current = null;
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      };
 
       const check = () => {
         rafRef.current = requestAnimationFrame(check);
@@ -160,36 +175,28 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
         const elapsed = Date.now() - startTimeRef.current;
 
         if (rms >= SPEECH_THRESHOLD) {
-          // ── Zone A: definite speech ──────────────────────────────────────
-          // Mark as spoken, clear any running silence timer, reset silence debounce.
-          hasSpokenRef.current   = true;
-          silenceStartRef.current = null;
-          clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = null;
+          // ── Zone A: clear speech ─────────────────────────────────────────
+          hasSpokenRef.current = true;
+          resetSilence();
 
         } else if (rms > SILENCE_THRESHOLD) {
-          // ── Zone B: ambient noise (8 < rms < 20) ────────────────────────
-          // Audio is present (keyboard, room noise, breathing).
-          // Clear silence timer so user mid-sentence ambient sounds don't trigger send.
-          // Do NOT set hasSpokenRef (ambient noise ≠ speech).
+          // ── Zone B: ambient noise / breath / keyboard ────────────────────
+          // Any non-trivial sound in this range clears the silence debounce.
+          // This prevents mid-sentence pauses (even quiet ones) from arming
+          // the send-timer.
           if (hasSpokenRef.current) {
-            silenceStartRef.current = null;
-            clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = null;
+            resetSilence();
           }
 
         } else {
-          // ── Zone C: true silence (rms <= 8) ─────────────────────────────
-          // Only start the send-timer if:
-          //   1. User has actually spoken (Zone A was reached), AND
-          //   2. Recording has passed MIN_RECORD_MS, AND
-          //   3. Silence has persisted >= SILENCE_LEADING_MS (debounce)
+          // ── Zone C: true silence (rms <= SILENCE_THRESHOLD) ──────────────
+          // Silence must persist SILENCE_LEADING_MS before the send-timer arms.
           if (hasSpokenRef.current && elapsed > MIN_RECORD_MS) {
             if (!silenceStartRef.current) {
-              silenceStartRef.current = Date.now(); // mark when silence zone began
+              silenceStartRef.current = Date.now();
             }
-            const silenceDuration = Date.now() - silenceStartRef.current;
-            if (silenceDuration >= SILENCE_LEADING_MS && !silenceTimerRef.current) {
+            const led = Date.now() - silenceStartRef.current;
+            if (led >= SILENCE_LEADING_MS && !silenceTimerRef.current) {
               silenceTimerRef.current = setTimeout(() => { _doStop(); }, SILENCE_DURATION);
             }
           }
@@ -203,20 +210,20 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
     if (isRecordingRef.current || isTranscribingRef.current) return;
     if (stoppingRef.current) return;
 
-    hasSpokenRef.current   = false;
+    hasSpokenRef.current    = false;
     silenceStartRef.current = null;
-    stoppingRef.current    = false;
-    chunksRef.current      = [];
-    startTimeRef.current   = Date.now();
+    stoppingRef.current     = false;
+    chunksRef.current       = [];
+    startTimeRef.current    = Date.now();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl:  true,
-          // sampleRate not specified — let browser use native rate;
-          // some mobile browsers silently ignore or mishandle sampleRate constraints.
+          echoCancellation:  true,   // keep — prevents TTS echo on mic
+          noiseSuppression:  true,   // keep — cleaner audio for Whisper
+          autoGainControl:   false,  // OFF — AGC compresses signal after speech,
+                                     //       making post-speech audio falsely appear
+                                     //       as Zone C (true silence)
         },
       });
 
@@ -251,8 +258,7 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
     else startRecording();
   }, [startRecording, stopRecording]);
 
-  // Hard cancel — stops recording immediately without sending to Whisper.
-  // Called by pause() in useVoiceInput before AI/TTS processing.
+  // Hard cancel — stops recording without sending to Whisper.
   const cancel = useCallback(() => {
     releaseAudioCtx();
     const recorder = mediaRecorderRef.current;
@@ -261,10 +267,10 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
       recorder.stop();
     }
     releaseStream();
-    chunksRef.current      = [];
-    hasSpokenRef.current   = false;
+    chunksRef.current       = [];
+    hasSpokenRef.current    = false;
     silenceStartRef.current = null;
-    stoppingRef.current    = false;
+    stoppingRef.current     = false;
     setRecording(false);
   }, [releaseAudioCtx, releaseStream, setRecording]);
 

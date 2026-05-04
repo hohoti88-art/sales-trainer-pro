@@ -16,14 +16,14 @@
 // Silence detection — 3-zone hysteresis (unchanged from v4):
 //   Zone A  rms >= 20   : speech  → reset silence debounce/timer
 //   Zone B  5 < rms < 20: ambient → reset silence debounce/timer
-//   Zone C  rms <= 5    : silence → after 1.2 s debounce, arm 5 s timer
+//   Zone C  rms <= 5    : silence → after 1.2 s debounce, arm 3.8 s timer (total 5 s)
 
 import { useState, useRef, useCallback } from 'react';
 
 const SPEECH_THRESHOLD   = 20;
 const SILENCE_THRESHOLD  = 5;
 const SILENCE_LEADING_MS = 1200;
-const SILENCE_DURATION   = 5000;
+const SILENCE_DURATION   = 3800;  // 1200ms debounce + 3800ms = 5s total
 const MIN_RECORD_MS      = 800;
 
 function getSupportedMimeType() {

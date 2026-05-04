@@ -14,4 +14,13 @@ export default function App() {
       <KakaoRedirectBanner />
       {/* PWA 설치 유도 배너 — Android Chrome에서만 표시 */}
       <InstallBanner />
-      <Ro
+      <Routes>
+        <Route path="/" element={<HomeScreen />} />
+        <Route path="/speech" element={<SpeechPractice />} />
+        <Route path="/call" element={<CallPractice />} />
+        <Route path="/upsell" element={<UpsellStrategy />} />
+        <Route path="/customer" element={<CustomerExpand />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}

@@ -1,12 +1,9 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// Model fallback chain: 2.5-flash → 2.0-flash → 1.5-flash
-// Thinking disabled on 2.5-flash to prevent reasoning leaking into response.text()
-const MODELS = [
-  { name: 'gemini-2.5-flash', config: { thinkingConfig: { thinkingBudget: 0 } } },
-  { name: 'gemini-2.0-flash', config: {} },
-  { name: 'gemini-1.5-flash', config: {} },
-];
+// 신규 계정은 gemini-2.5-flash만 사용 가능 (1.5·2.0은 신규 계정 접근 불가)
+// thinkingBudget:0 — 내부 추론이 response.text()에 노출되는 문제 방지
+const MODEL = 'gemini-2.5-flash';
+const NO_THINKING = { thinkingConfig: { thinkingBudget: 0 } };
 
 function extractText(result) {
   const parts = result.response?.candidates?.[0]?.content?.parts;
@@ -17,30 +14,6 @@ function extractText(result) {
   return result.response.text();
 }
 
-async function tryModel(genAI, modelName, generationConfig, systemInstruction, action, body) {
-  const { history, message, prompt } = body;
-  const modelOpts = {
-    model: modelName,
-    generationConfig,
-    ...(systemInstruction && { systemInstruction }),
-  };
-
-  if (action === 'chat') {
-    const model = genAI.getGenerativeModel(modelOpts);
-    const chat = model.startChat({ history: history || [] });
-    const result = await chat.sendMessage(message);
-    return extractText(result);
-  }
-
-  if (action === 'generate') {
-    const model = genAI.getGenerativeModel({ model: modelName, generationConfig });
-    const result = await model.generateContent(prompt);
-    return extractText(result);
-  }
-
-  throw new Error('Unknown action');
-}
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -48,27 +21,38 @@ export default async function handler(req, res) {
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
+    return res.status(500).json({ error: 'GEMINI_API_KEY가 Vercel 환경변수에 설정되지 않았습니다' });
   }
 
-  const { action, systemInstruction } = req.body;
+  const { action, systemInstruction, history, message, prompt } = req.body || {};
   if (action !== 'chat' && action !== 'generate') {
     return res.status(400).json({ error: 'Unknown action' });
   }
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  let lastErr;
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const modelOpts = {
+      model: MODEL,
+      generationConfig: NO_THINKING,
+      ...(systemInstruction && { systemInstruction }),
+    };
 
-  for (const { name, config } of MODELS) {
-    try {
-      const text = await tryModel(genAI, name, config, systemInstruction, action, req.body);
-      return res.json({ text });
-    } catch (err) {
-      console.warn(`${name} failed:`, err.message);
-      lastErr = err;
+    let text;
+    if (action === 'chat') {
+      const model = genAI.getGenerativeModel(modelOpts);
+      const chat = model.startChat({ history: history || [] });
+      const result = await chat.sendMessage(message);
+      text = extractText(result);
+    } else {
+      const model = genAI.getGenerativeModel({ model: MODEL, generationConfig: NO_THINKING });
+      const result = await model.generateContent(prompt);
+      text = extractText(result);
     }
-  }
 
-  console.error('All Gemini models failed:', lastErr?.message);
-  return res.status(500).json({ error: lastErr?.message || 'Gemini API error' });
+    return res.json({ text });
+  } catch (err) {
+    console.error('Gemini API error:', err.message);
+    // 403 = API 키 권한 문제, 상세 메시지를 그대로 반환
+    return res.status(500).json({ error: err.message });
+  }
 }

@@ -32,7 +32,7 @@ export default function CallPractice() {
     loading, error,
     ttsEnabled, toggleTts,
     isListening, liveText,
-    toggleMic, stopMic, speakThenResume,
+    toggleMic, startMic, stopMic, speakThenResume,
     sendMessage,
   } = useVoiceChat({
     chatRef,

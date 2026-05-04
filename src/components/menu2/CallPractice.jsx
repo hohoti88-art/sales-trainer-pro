@@ -213,6 +213,25 @@ export default function CallPractice() {
           <Bubble key={i} m={m} personality={personality} profile={form.profile} />
         ))}
         {loading && <ThinkingBubble color="green" />}
+        {/* 실시간 발화 버블 */}
+        {isListening && liveText ? (
+          <div className="flex justify-end">
+            <div className="max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm bg-emerald-500 text-white rounded-br-sm opacity-80">
+              {liveText}
+            </div>
+            <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center ml-2 flex-shrink-0 mt-1 opacity-80">
+              <User size={15} className="text-white" />
+            </div>
+          </div>
+        ) : isListening && !loading ? (
+          <div className="flex justify-end">
+            <div className="px-4 py-3 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center gap-1.5">
+              {[0,1,2].map(i => (
+                <span key={i} className="w-2 h-2 bg-emerald-300 rounded-full animate-bounce" style={{animationDelay:`${i*0.15}s`}} />
+              ))}
+            </div>
+          </div>
+        ) : null}
         {error && <p className="text-red-500 text-xs text-center">{error}</p>}
         <div ref={messagesEndRef} />
       </div>
@@ -221,14 +240,22 @@ export default function CallPractice() {
       <div className="bg-white border-t border-slate-200 px-4 py-3 max-w-2xl w-full mx-auto">
         <div className="flex gap-2">
           <MicButton isListening={isListening} onClick={toggleMic} />
-          <input
-            className="flex-1 border border-slate-300 rounded-xl px-4 py-3 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all text-sm"
-            placeholder={isListening ? (liveText ? '' : '듣고 있습니다...') : '메시지를 입력하거나 마이크를 누르세요'}
-            value={isListening ? liveText : input}
-            onChange={e => { if (!isListening) setInput(e.target.value); }}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-          />
-          <SendButton onClick={() => sendMessage()} disabled={loading || !(isListening ? liveText : input).trim()} color="green" />
+          {isListening ? (
+            <div className="flex-1 flex items-center px-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-400 text-sm select-none">
+              {liveText ? ' ' : '듣고 있습니다...'}
+            </div>
+          ) : (
+            <>
+              <input
+                className="flex-1 border border-slate-300 rounded-xl px-4 py-3 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all text-sm"
+                placeholder="메시지를 입력하거나 마이크를 누르세요"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+              />
+              <SendButton onClick={() => sendMessage()} disabled={loading || !input.trim()} color="green" />
+            </>
+          )}
         </div>
       </div>
 

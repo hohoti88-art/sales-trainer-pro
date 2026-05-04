@@ -207,6 +207,20 @@ export function unlockAudio() {
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(u);
   }
+
+  // 4. SpeechRecognition 사전 잠금 해제 — 사용자 제스처 컨텍스트에서 start()를 한 번 호출해두면
+  //    이후 TTS 종료 후 자동 resumeMic() → recognition.start() 도 허용됨 (Chrome 정책)
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) {
+    try {
+      const primer = new SR();
+      primer.continuous = false;
+      primer.onend   = () => {};
+      primer.onerror = () => {};
+      primer.start();
+      setTimeout(() => { try { primer.abort(); } catch {} }, 200);
+    } catch {}
+  }
 }
 
 // 전화벨 (AudioContext 사용 — 벨소리는 AEC 에코 대상이 아님)

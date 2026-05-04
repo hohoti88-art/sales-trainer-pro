@@ -1,12 +1,24 @@
-// useMediaRecorder.js v2
-// Auto-sends after 5s silence. Refs mirror state to avoid stale closure bugs.
-// cancel() stops recording immediately without Whisper (used by speakThenResume/sendMessage)
+// useMediaRecorder.js v3
+// Hysteresis silence detection: SPEECH_THRESHOLD / SILENCE_THRESHOLD separated.
+//
+// Root cause of premature cutoff in v2:
+//   Single SILENCE_THRESHOLD=8 served dual purpose — both detecting speech AND silence.
+//   Ambient noise (RMS ~10-15) set hasSpokenRef=true immediately.
+//   Any brief dip below 8 (between words) started the 5s timer.
+//
+// Fix: two thresholds + a minimum silence-frame count before timer starts.
+//   SPEECH_THRESHOLD=20  → only clear speech sets hasSpokenRef (filters ambient noise)
+//   SILENCE_THRESHOLD=8  → only true quiet triggers the silence timer
+//   Band [8-20]          → ambient noise: clears any running silence timer, does NOT set hasSpokenRef
+//   SILENCE_LEADING_MS   → consecutive silence must last this long before timer begins (debounce)
 
 import { useState, useRef, useCallback } from 'react';
 
-const SILENCE_THRESHOLD = 8;
-const SILENCE_DURATION  = 5000;
-const MIN_RECORD_MS     = 800;
+const SPEECH_THRESHOLD   = 20;   // RMS above this = definite speech
+const SILENCE_THRESHOLD  = 8;    // RMS below this = true silence
+const SILENCE_DURATION   = 6000; // ms of true silence before auto-send
+const MIN_RECORD_MS      = 800;  // ignore silence detection for first 800ms
+const SILENCE_LEADING_MS = 400;  // silence must persist >=400ms before timer starts
 
 function getSupportedMimeType() {
   const candidates = [
@@ -26,21 +38,21 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
   const [isRecording,     setIsRecording]     = useState(false);
   const [isTranscribing,  setIsTranscribing]  = useState(false);
 
-  // Mirror state in refs so startRecording guard never reads stale closure values
   const isRecordingRef    = useRef(false);
   const isTranscribingRef = useRef(false);
 
-  const mediaRecorderRef = useRef(null);
-  const chunksRef        = useRef([]);
-  const streamRef        = useRef(null);
-  const mimeTypeRef      = useRef('');
-  const audioCtxRef      = useRef(null);
-  const analyserRef      = useRef(null);
-  const silenceTimerRef  = useRef(null);
-  const rafRef           = useRef(null);
-  const hasSpokenRef     = useRef(false);
-  const startTimeRef     = useRef(0);
-  const stoppingRef      = useRef(false);
+  const mediaRecorderRef  = useRef(null);
+  const chunksRef         = useRef([]);
+  const streamRef         = useRef(null);
+  const mimeTypeRef       = useRef('');
+  const audioCtxRef       = useRef(null);
+  const analyserRef       = useRef(null);
+  const silenceTimerRef   = useRef(null);
+  const rafRef            = useRef(null);
+  const hasSpokenRef      = useRef(false);
+  const startTimeRef      = useRef(0);
+  const stoppingRef       = useRef(false);
+  const silenceStartRef   = useRef(null); // timestamp when silence zone entered
 
   const setRecording = useCallback((val) => {
     isRecordingRef.current = val;
@@ -62,8 +74,9 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
   const releaseAudioCtx = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
     clearTimeout(silenceTimerRef.current);
-    rafRef.current = null;
+    rafRef.current        = null;
     silenceTimerRef.current = null;
+    silenceStartRef.current = null;
     try { audioCtxRef.current?.close(); } catch {}
     audioCtxRef.current = null;
     analyserRef.current = null;
@@ -129,11 +142,11 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
 
       const ctx      = new AudioCtx();
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
+      analyser.fftSize = 2048; // larger buffer → smoother RMS, fewer false spikes
       ctx.createMediaStreamSource(stream).connect(analyser);
 
-      audioCtxRef.current  = ctx;
-      analyserRef.current  = analyser;
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
       const data = new Uint8Array(analyser.frequencyBinCount);
 
       const check = () => {
@@ -146,13 +159,39 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
 
         const elapsed = Date.now() - startTimeRef.current;
 
-        if (rms > SILENCE_THRESHOLD) {
-          hasSpokenRef.current = true;
+        if (rms >= SPEECH_THRESHOLD) {
+          // ── Zone A: definite speech ──────────────────────────────────────
+          // Mark as spoken, clear any running silence timer, reset silence debounce.
+          hasSpokenRef.current   = true;
+          silenceStartRef.current = null;
           clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = null;
-        } else if (hasSpokenRef.current && elapsed > MIN_RECORD_MS) {
-          if (!silenceTimerRef.current) {
-            silenceTimerRef.current = setTimeout(() => { _doStop(); }, SILENCE_DURATION);
+
+        } else if (rms > SILENCE_THRESHOLD) {
+          // ── Zone B: ambient noise (8 < rms < 20) ────────────────────────
+          // Audio is present (keyboard, room noise, breathing).
+          // Clear silence timer so user mid-sentence ambient sounds don't trigger send.
+          // Do NOT set hasSpokenRef (ambient noise ≠ speech).
+          if (hasSpokenRef.current) {
+            silenceStartRef.current = null;
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+          }
+
+        } else {
+          // ── Zone C: true silence (rms <= 8) ─────────────────────────────
+          // Only start the send-timer if:
+          //   1. User has actually spoken (Zone A was reached), AND
+          //   2. Recording has passed MIN_RECORD_MS, AND
+          //   3. Silence has persisted >= SILENCE_LEADING_MS (debounce)
+          if (hasSpokenRef.current && elapsed > MIN_RECORD_MS) {
+            if (!silenceStartRef.current) {
+              silenceStartRef.current = Date.now(); // mark when silence zone began
+            }
+            const silenceDuration = Date.now() - silenceStartRef.current;
+            if (silenceDuration >= SILENCE_LEADING_MS && !silenceTimerRef.current) {
+              silenceTimerRef.current = setTimeout(() => { _doStop(); }, SILENCE_DURATION);
+            }
           }
         }
       };
@@ -161,14 +200,14 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
   }, [_doStop]);
 
   const startRecording = useCallback(async () => {
-    // Use refs (not state) to avoid stale closure reads
     if (isRecordingRef.current || isTranscribingRef.current) return;
     if (stoppingRef.current) return;
 
-    hasSpokenRef.current  = false;
-    stoppingRef.current   = false;
-    chunksRef.current     = [];
-    startTimeRef.current  = Date.now();
+    hasSpokenRef.current   = false;
+    silenceStartRef.current = null;
+    stoppingRef.current    = false;
+    chunksRef.current      = [];
+    startTimeRef.current   = Date.now();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -176,7 +215,8 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl:  true,
-          sampleRate: 16000,
+          // sampleRate not specified — let browser use native rate;
+          // some mobile browsers silently ignore or mishandle sampleRate constraints.
         },
       });
 
@@ -211,8 +251,8 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
     else startRecording();
   }, [startRecording, stopRecording]);
 
-  // Hard cancel - stops recording without sending to Whisper
-  // Called by speakThenResume() and sendMessage() before TTS/AI processing
+  // Hard cancel — stops recording immediately without sending to Whisper.
+  // Called by pause() in useVoiceInput before AI/TTS processing.
   const cancel = useCallback(() => {
     releaseAudioCtx();
     const recorder = mediaRecorderRef.current;
@@ -221,9 +261,10 @@ export function useMediaRecorder({ onResult, onError, getContextPrompt }) {
       recorder.stop();
     }
     releaseStream();
-    chunksRef.current    = [];
-    hasSpokenRef.current = false;
-    stoppingRef.current  = false;
+    chunksRef.current      = [];
+    hasSpokenRef.current   = false;
+    silenceStartRef.current = null;
+    stoppingRef.current    = false;
     setRecording(false);
   }, [releaseAudioCtx, releaseStream, setRecording]);
 

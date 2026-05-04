@@ -1,14 +1,17 @@
 // useVoiceInput v8 — Whisper STT (gpt-4o-mini-transcribe)
-// MediaRecorder + 5s silence detection -> /api/stt -> onResult(text)
+// MediaRecorder + silence detection -> /api/stt -> onResult(text)
 // Same external interface as v7 (Web Speech API):
 //   { isListening, liveText, toggle, start, stop, pause, resume }
 // useVoiceChat.js does NOT need to change.
+//
+// Note: real-time partial text is not possible with server-side Whisper.
+// liveText shows a status indicator instead (recording / transcribing).
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useMediaRecorder } from './useMediaRecorder';
 
 export function useVoiceInput(onResult) {
-  const [liveText, setLiveText] = useState('');
+  const [liveText, setLiveText]   = useState('');
 
   // activeRef: true = user wants mic on (survives pause/resume cycles)
   //            false = user explicitly stopped mic (toggle off or stop())
@@ -17,9 +20,6 @@ export function useVoiceInput(onResult) {
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
 
   // Called by useMediaRecorder after Whisper returns transcribed text.
-  // At this point the recorder has already stopped (audio was sent to Whisper).
-  // useVoiceChat.sendMessage() will call pauseMic() right after onResult fires,
-  // which calls cancel() below — safe no-op since recording is already inactive.
   const handleResult = useCallback((text) => {
     setLiveText('');
     if (!activeRef.current) return; // stop() was called during transcription
@@ -35,10 +35,20 @@ export function useVoiceInput(onResult) {
     onError: handleError,
   });
 
-  // isListening = true while mic is open (recording) OR while waiting for Whisper.
-  // Both phases lock the input field to liveText (empty during Whisper wait is fine —
-  // the placeholder "말씀하세요..." is visible).
+  // isListening: true while recording OR while waiting for Whisper transcription.
   const isListening = isRecording || isTranscribing;
+
+  // liveText: status indicator while recording/transcribing.
+  // (Real-time partial text is not possible with server-side Whisper.)
+  useEffect(() => {
+    if (isRecording) {
+      setLiveText('');            // keep input field clear; placeholder shows hint
+    } else if (isTranscribing) {
+      setLiveText('');
+    } else {
+      setLiveText('');
+    }
+  }, [isRecording, isTranscribing]);
 
   // start: activate mic from a fully stopped state (e.g. first toggle-on)
   const start = useCallback(() => {

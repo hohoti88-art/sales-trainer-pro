@@ -1,15 +1,13 @@
-// useVoiceInput v10 — Hybrid: Web Speech API VAD + MediaRecorder → Whisper
+// useVoiceInput v11 — Hybrid: Web Speech API VAD + MediaRecorder → Whisper
 //
-// Problem with v2-v9: RMS-based silence detection is unreliable.
-//   - Between words, noise suppression drops RMS to near-zero → false silence
-//   - Different devices/environments need different thresholds
-//   - No amount of tuning makes it equivalent to browser-native VAD
-//
-// Solution: use Web Speech API (v7 logic) for silence detection only.
-//   Web Speech API detects end-of-speech reliably (server-side neural VAD).
-//   When it decides to flush → stop MediaRecorder → send audio to Whisper.
-//   Whisper provides the actual text (better Korean accuracy).
-//   Web Speech API text is fallback only (if Whisper fails).
+// v10 → v11 fixes:
+//   1. recognition.onend (desktop): was immediately flushing when text existed.
+//      Chrome fires onend after ~1-2s silence even with continuous:true.
+//      Fix: restart recognition on onend (same as Android). Let SILENCE_TIMEOUT
+//      be the ONLY trigger for flush. This allows indefinitely long speech.
+//   2. SILENCE_TIMEOUT: 2000ms → 5000ms. User must be silent for 5s to submit.
+//   3. getUserMedia noiseSuppression: false → true. Prevents interfering with
+//      Web Speech API's audio processing pipeline (both now use same constraints).
 //
 // Same external interface as v7: { isListening, liveText, toggle, start, stop, pause, resume }
 // useVoiceChat.js unchanged.
@@ -17,7 +15,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 const isMobileAndroid  = /Android/i.test(navigator.userAgent);
-const SILENCE_TIMEOUT  = 2000;   // ms of silence after last isFinal before sending
+const SILENCE_TIMEOUT  = 5000;   // ms of silence after last isFinal before sending
 const RESTART_DELAY    = isMobileAndroid ? 700 : 300;
 const DEDUP_WINDOW_MS  = 4000;
 
@@ -84,7 +82,7 @@ export function useVoiceInput(onResult) {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,   // keep — prevents TTS echo
-            noiseSuppression: false,  // off  — let Whisper handle noise
+            noiseSuppression: true,   // on   — match Web Speech API defaults (prevents VAD interference)
             autoGainControl:  false,  // off  — stable signal level
           },
         });
@@ -247,22 +245,15 @@ export function useVoiceInput(onResult) {
       if (generationRef.current !== myGen) return;
       recognitionRef.current = null;
       if (pausedRef.current || !activeRef.current) return;
-      if (accumulatedRef.current.trim()) {
-        if (isMobileAndroid) {
-          setTimeout(() => {
-            if (activeRef.current && !pausedRef.current && generationRef.current === myGen)
-              createAndStartRef.current?.();
-          }, RESTART_DELAY);
-        } else {
-          flushAccumulated();
-        }
-      } else {
-        accumulatedRef.current = latestInterimRef.current = '';
-        setTimeout(() => {
-          if (activeRef.current && !pausedRef.current && generationRef.current === myGen)
-            createAndStartRef.current?.();
-        }, RESTART_DELAY);
-      }
+      // [v11] Desktop과 Android 모두 재시작으로 통일.
+      // Chrome은 continuous:true여도 침묵 ~1-2s 후 onend를 강제 발생시킨다.
+      // onend에서 즉시 flush하면 중간 발화가 끊김 → 재시작 후 SILENCE_TIMEOUT(5s)만 flush 권한을 가짐.
+      // 말이 없으면 타이머가 그대로 카운트다운 → 5초 뒤 flushAccumulated 발동.
+      // 말이 이어지면 새 isFinal → resetSubmitTimer → 타이머 리셋.
+      setTimeout(() => {
+        if (activeRef.current && !pausedRef.current && generationRef.current === myGen)
+          createAndStartRef.current?.();
+      }, RESTART_DELAY);
     };
 
     try {

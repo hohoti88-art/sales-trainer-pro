@@ -152,7 +152,7 @@ export default function SpeechPractice() {
         ))}
         {loading && <ThinkingBubble color="blue" />}
         {/* 실시간 발화 버블 — 말하는 내용이 대화창에 자연스럽게 표시됨 */}
-        {isListening && liveText ? (
+        {isListening && liveText && !loading ? (
           <div className="flex justify-end">
             <div className="max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm bg-blue-400 text-white rounded-br-sm opacity-80">
               {liveText}

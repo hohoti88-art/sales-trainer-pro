@@ -215,7 +215,7 @@ export default function CallPractice() {
         ))}
         {loading && <ThinkingBubble color="green" />}
         {/* 실시간 발화 버블 */}
-        {isListening && liveText ? (
+        {isListening && liveText && !loading ? (
           <div className="flex justify-end">
             <div className="max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm bg-emerald-500 text-white rounded-br-sm opacity-80">
               {liveText}

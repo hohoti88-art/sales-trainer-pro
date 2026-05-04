@@ -286,7 +286,7 @@ export function useVoiceInput(onResult) {
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     pausedRef.current = true;
     cancelCapture();
-    // recognition keeps running; results ignored via pausedRef check in onresult
+    setLiveText('');
   }, [cancelCapture]);
 
   // [v12] resume: only restart recognition if it died while paused

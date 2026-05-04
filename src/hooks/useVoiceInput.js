@@ -226,6 +226,8 @@ export function useVoiceInput(onResult) {
           interim += event.results[i][0].transcript;
         }
       }
+      // [v11] interim 결과가 있으면 타이머 리셋 — 말하는 도중 타이머 만료 방지
+      if (interim) resetSubmitTimer();
       latestInterimRef.current = interim;
       setLiveText(accumulatedRef.current || interim);
     };

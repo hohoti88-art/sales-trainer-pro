@@ -51,6 +51,7 @@ export default function SpeechPractice() {
       return;
     }
     unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
+    startMic(); // [v12] start recognition within gesture context (before any await)
     setStartLoading(true);
     setStartError('');
     try {

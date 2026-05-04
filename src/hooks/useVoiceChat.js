@@ -59,6 +59,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   //           → false 확인 후 1000ms 추가 대기 → resumeMic() (잔향 소멸 여유)
   function speakThenResume(text) {
     if (ttsEnabledRef.current) {
+      pauseMic(); // block mic results during TTS (recognition keeps running)
       setTimeout(() => speak(text, personality, profile, () => {
         if (isMobileDevice) {
           const pollAndResume = () => {

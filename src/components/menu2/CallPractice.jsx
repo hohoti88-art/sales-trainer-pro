@@ -77,6 +77,7 @@ export default function CallPractice() {
 
   async function handleStartCall() {
     unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
+    startMic(); // [v12] start recognition within gesture context
     setStartLoading(true);
     try {
       const chat = await startPersonaChat(form.product, form.profile + ' (1~2문장으로 짧게 응답)', personality, form.painPoints, 'call');

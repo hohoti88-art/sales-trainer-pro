@@ -112,7 +112,7 @@ export default function SpeechPractice() {
               <textarea rows={3} className={TEXTAREA} placeholder="예: 직원 채용·관리에 시간이 너무 많이 걸림" value={form.painPoints} onChange={e => setForm(f => ({ ...f, painPoints: e.target.value }))} />
             </Field>
             <button onClick={handleStart} disabled={startLoading} className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold py-4 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-sm">
-              {startLoading ? <><Loader2 size={20} className="animate-spin" /> 페르소나 생성 중...</> : '🗣️ 대화 시작'}
+              {startLoading ? <><Loader2 size={20} className="animate-spin" /> 페르소나 생성 중...</> : '🤝 페르소나 생성'}
             </button>
           </div>
         </div>
@@ -293,4 +293,3 @@ export function TtsButton({ enabled, onToggle }) {
 }
 
 export { Bubble, ThinkingBubble };
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   

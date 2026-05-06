@@ -258,9 +258,9 @@ export function useVoiceInput(onResult) {
       if (generationRef.current !== myGen) return;
       recognitionRef.current = null;
       if (!activeRef.current) return;
-      // [v12] Always restart if active (even when paused).
-      // Chrome permits onend-triggered restarts as session continuation.
-      // This keeps recognition alive without requiring a new user gesture.
+      // TTS 재생 중(paused)에는 재시작 금지 — Android AudioFocus 충돌로 TTS가 떨리고 벨소리 발생.
+      // resumeMic()이 TTS 종료 후 recognition을 다시 시작한다.
+      if (pausedRef.current) return;
       setTimeout(() => {
         if (activeRef.current && generationRef.current === myGen)
           createAndStartRef.current?.();

@@ -55,7 +55,7 @@ export default function CustomerExpand() {
 
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
-        <NavBar title="고객 확대하기" />
+        <NavBar title="신규 고객 창출하기" />
 
         <div className="max-w-2xl mx-auto w-full px-4 pt-5 pb-4 flex-1 flex flex-col">
           {/* 헤더 */}
@@ -125,10 +125,10 @@ export default function CustomerExpand() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <NavBar title="고객 확대하기" />
+      <NavBar title="신규 고객 창출하기" />
       <div className="max-w-2xl mx-auto px-4 py-8">
-        <h2 className="text-2xl font-bold text-slate-800 mb-1">고객 확대 전략 분석</h2>
-        <p className="text-slate-500 text-sm mb-6">현재 고객층과 채널을 분석해 확장 전략을 제안합니다</p>
+        <h2 className="text-2xl font-bold text-slate-800 mb-1">신규 고객 창출 전략 분석</h2>
+        <p className="text-slate-500 text-sm mb-6">현재 고객층과 채널을 분석해 신규 고객 창출 전략을 제안합니다</p>
 
         {error && (
           <div className="bg-red-50 border border-red-300 text-red-700 px-4 py-3 rounded-xl mb-4 text-sm">{error}</div>

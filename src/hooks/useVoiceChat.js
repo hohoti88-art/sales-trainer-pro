@@ -66,7 +66,8 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
             if (getIsSpeaking()) {
               setTimeout(pollAndResume, 300);
             } else {
-              setTimeout(resumeMic, 1000);
+              // 모바일: TTS 잔향 소멸 + 에코 유예기간을 위해 2000ms 대기
+              setTimeout(resumeMic, 2000);
             }
           };
           setTimeout(pollAndResume, 100);

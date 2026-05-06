@@ -8,6 +8,7 @@ import { playRingTone, unlockAudio } from '../../services/ttsService';
 import { MicButton, SendButton, TtsButton, Bubble, ThinkingBubble } from '../menu1/SpeechPractice';
 
 const PERSONALITIES = ['까다로운형', '바쁜형', '친절한형', '의심형', '직접입력'];
+const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 export default function CallPractice() {
   const [step, setStep] = useState('form');
@@ -42,6 +43,14 @@ export default function CallPractice() {
     ttsStorageKey: 'sales_call_tts_enabled',
     defaultTts: true,
   });
+
+  // 모바일에서 페이지 로드 시 마이크 권한 미리 요청
+  useEffect(() => {
+    if (!isMobileDevice) return;
+    navigator.mediaDevices?.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+      .then(s => { s.getTracks().forEach(t => t.stop()); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (step === 'call') {

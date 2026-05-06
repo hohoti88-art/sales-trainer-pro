@@ -12,9 +12,13 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 const isMobileAndroid  = /Android/i.test(navigator.userAgent);
+const isMobileDevice   = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 const SILENCE_TIMEOUT  = 5000;
 const RESTART_DELAY    = isMobileAndroid ? 700 : 300;
 const DEDUP_WINDOW_MS  = 4000;
+// TTS 재생 후 resumeMic() 직후 음성인식 결과를 무시하는 유예 기간
+// 모바일에서 TTS 잔향이 Web Speech API에 에코로 잡히는 것을 방지
+const RESUME_GRACE_MS  = isMobileDevice ? 2000 : 0;
 
 // ── MediaRecorder helpers ─────────────────────────────────────────────────────
 
@@ -64,6 +68,7 @@ export function useVoiceInput(onResult) {
   const audioChunksRef    = useRef([]);
   const isCapturingRef    = useRef(false);
   const isTranscribingRef = useRef(false);
+  const lastResumeTimeRef = useRef(0); // resumeMic() 호출 시각 — grace period 계산에 사용
 
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
 
@@ -128,8 +133,10 @@ export function useVoiceInput(onResult) {
       const chunks   = audioChunksRef.current.splice(0);
       const mimeType = mimeTypeRef.current || recorder.mimeType || 'audio/webm';
       const blob     = chunks.length ? new Blob(chunks, { type: mimeType }) : null;
+      // 모바일은 1000bytes, PC는 3000bytes — 모바일은 짧은 발화도 Whisper로 처리
+      const MIN_BLOB = isMobileDevice ? 1000 : 3000;
       try {
-        if (!blob || blob.size < 3000) throw new Error('no audio');
+        if (!blob || blob.size < MIN_BLOB) throw new Error('no audio');
         const base64 = await blobToBase64(blob);
         const res = await fetch('/api/stt', {
           method: 'POST',
@@ -142,7 +149,9 @@ export function useVoiceInput(onResult) {
         onResultRef.current?.((text?.trim()) || fallbackText || '');
       } catch {
         setLiveText('');
-        if (fallbackText) onResultRef.current?.(fallbackText);
+        // 모바일에서 Whisper 실패 시 Web Speech API 텍스트(에코 가능성)를 fallback으로 쓰지 않음
+        // PC에서는 fallback 허용
+        if (!isMobileDevice && fallbackText) onResultRef.current?.(fallbackText);
       } finally {
         isTranscribingRef.current = false;
         setIsTranscribing(false);
@@ -193,6 +202,12 @@ export function useVoiceInput(onResult) {
 
     recognition.onresult = (event) => {
       if (!activeRef.current || generationRef.current !== myGen || pausedRef.current) return;
+      // TTS 종료 후 grace period 동안 결과 무시 — 에코(TTS 잔향) 방지
+      if (RESUME_GRACE_MS > 0 && Date.now() - lastResumeTimeRef.current < RESUME_GRACE_MS) {
+        accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
+        setLiveText('');
+        return;
+      }
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         if (event.results[i].isFinal) {
@@ -293,6 +308,7 @@ export function useVoiceInput(onResult) {
   const resume = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
+    lastResumeTimeRef.current = Date.now(); // grace period 시작 — TTS 잔향 에코 방지
     activeRef.current = true;
     pausedRef.current = false;
     if (!recognitionRef.current) {

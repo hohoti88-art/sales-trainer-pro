@@ -35,7 +35,7 @@ const menuItems = [
   },
   {
     icon: <Users size={36} className="text-amber-500" />,
-    title: '고객 확대하기',
+    title: '신규 고객 창출하기',
     subtitle: '새로운 고객층과 판매 채널을 발굴하세요',
     path: '/expand',
     accent: 'border-amber-200 hover:border-amber-400',

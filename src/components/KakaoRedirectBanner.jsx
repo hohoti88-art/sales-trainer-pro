@@ -2,8 +2,9 @@ import { useState } from 'react';
 
 const ua = navigator.userAgent;
 const isKakaoTalk = /KAKAOTALK/i.test(ua);
-const isInAppBrowser = isKakaoTalk || /Instagram|FBAV|FB_IAB|Line|NaverApp|DaumApp/i.test(ua);
+const isInAppBrowser = isKakaoTalk || /Instagram|FBAV|FB_IAB|Line|NaverApp|DaumApp|NAVER|Daum|Naver|MicroMessenger|Twitter|Snapchat|Tistory|band\.us|밴드/i.test(ua);
 const isIOS = /iPhone|iPad|iPod/i.test(ua);
+const isAndroid = /Android/i.test(ua);
 
 export default function KakaoRedirectBanner() {
   const [copied, setCopied] = useState(false);
@@ -56,7 +57,7 @@ export default function KakaoRedirectBanner() {
           <strong className="text-white">Chrome 또는 Safari</strong>로 열어야 합니다.
         </p>
 
-        {!isIOS ? (
+        {isAndroid ? (
           <button
             onClick={openInChrome}
             className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold mb-3 transition-colors"

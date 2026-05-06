@@ -7,6 +7,7 @@ import { useVoiceChat } from '../../hooks/useVoiceChat';
 import { speak, unlockAudio } from '../../services/ttsService';
 
 const PERSONALITIES = ['까다로운형', '바쁜형', '친절한형', '의심형', '직접입력'];
+const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 export default function SpeechPractice() {
   const [step, setStep] = useState('form');
@@ -37,6 +38,14 @@ export default function SpeechPractice() {
     ttsStorageKey: 'sales_tts_enabled',
     defaultTts: true,
   });
+
+  // 모바일에서 페이지 로드 시 마이크 권한 미리 요청 — 버튼 클릭 시 자동 활성화를 위해
+  useEffect(() => {
+    if (!isMobileDevice) return;
+    navigator.mediaDevices?.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+      .then(s => { s.getTracks().forEach(t => t.stop()); })
+      .catch(() => {});
+  }, []);
 
   // 메시지 추가될 때마다 스크롤 (useEffect로 DOM 업데이트 후 실행 보장)
   const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -112,7 +121,7 @@ export default function SpeechPractice() {
               <textarea rows={3} className={TEXTAREA} placeholder="예: 직원 채용·관리에 시간이 너무 많이 걸림" value={form.painPoints} onChange={e => setForm(f => ({ ...f, painPoints: e.target.value }))} />
             </Field>
             <button onClick={handleStart} disabled={startLoading} className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold py-4 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-sm">
-              {startLoading ? <><Loader2 size={20} className="animate-spin" /> 페르소나 생성 중...</> : '🤝 페르소나 생성' }
+              {startLoading ? <><Loader2 size={20} className="animate-spin" /> 페르소나 생성 중...</> : '🤝 페르소나 생성하기' }
             </button>
           </div>
         </div>

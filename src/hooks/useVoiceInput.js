@@ -304,26 +304,31 @@ export function useVoiceInput(onResult) {
     startCapture();
   }, [createAndStart, startCapture]);
 
-  // [v12] pause: do NOT stop recognition — just block result processing
+  // [v13] pause: abort recognition to flush audio buffer — prevents TTS echo on resume.
+  // generationRef++ invalidates all pending onend/onerror callbacks from the aborted session.
   const pause = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     pausedRef.current = true;
+    generationRef.current++;
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch {}
+      recognitionRef.current = null;
+    }
     cancelCapture();
     setLiveText('');
   }, [cancelCapture]);
 
-  // [v12] resume: only restart recognition if it died while paused
+  // [v13] resume: always create fresh recognition (aborted in pause).
+  // Fresh start clears any internal audio buffer → no TTS echo.
   const resume = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
-    lastResumeTimeRef.current = Date.now(); // grace period 시작 — TTS 잔향 에코 방지
-    // Chrome이 TTS AudioFocus로 recognition을 강제 종료하면 onerror → activeRef=false.
-    // 반드시 true로 복구해야 onresult/onend 핸들러가 계속 동작한다.
+    lastResumeTimeRef.current = Date.now();
     activeRef.current = true;
     pausedRef.current = false;
     if (!recognitionRef.current) {
-      createAndStart(); // restart only if died during pause
+      createAndStart();
     }
     startCapture();
   }, [createAndStart, startCapture]);

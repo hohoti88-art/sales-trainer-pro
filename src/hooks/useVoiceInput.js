@@ -205,7 +205,7 @@ export function useVoiceInput(onResult) {
 
     const recognition = new SR();
     recognition.lang            = 'ko-KR';
-    recognition.continuous      = isMobileAndroid ? false : true;
+    recognition.continuous      = true;
     recognition.interimResults  = true;
     recognition.maxAlternatives = 1;
 

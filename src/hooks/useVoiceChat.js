@@ -142,13 +142,19 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
 
   sendMessageRef.current = sendMessage;
 
+  // stopMic은 TTS도 함께 중단 (피드백 버튼 등 대화 완전 종료 시 사용)
+  const stopMicAndTts = useCallback(() => {
+    stopSpeaking();
+    stopMic();
+  }, [stopMic]);
+
   return {
     messages, setMessages,
     input, setInput,
     loading, error, setError,
     ttsEnabled, toggleTts,
     isListening, liveText,
-    toggleMic, startMic, stopMic, pauseMic, speakThenResume,
+    toggleMic, startMic, stopMic: stopMicAndTts, pauseMic, speakThenResume,
     sendMessage,
   };
 }

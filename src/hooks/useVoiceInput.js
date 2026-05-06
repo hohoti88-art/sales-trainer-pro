@@ -223,7 +223,7 @@ export function useVoiceInput(onResult, sttContext = '') {
           speechStartTime.current = Date.now();
           clearTimeout(silenceVADTimer.current);
           silenceVADTimer.current = null;
-          startMobileRecorder();
+          // 녹음은 resumeMobile()에서 이미 시작됨 — 여기서는 발화 시작 시각만 기록
         }
       } else {
         if (rms < VAD_SILENCE_THRESHOLD) {
@@ -237,12 +237,13 @@ export function useVoiceInput(onResult, sttContext = '') {
                 setLiveText('');
                 sendMobileAudio();
               } else {
-                // 너무 짧음 — 노이즈로 판단, 버림
+                // 너무 짧음 — 노이즈로 판단, 버리고 즉시 재녹음
                 const rec = recorderRef.current;
                 if (rec && rec.state !== 'inactive') { rec.onstop = null; rec.stop(); }
                 isCapturingRef.current = false;
                 audioChunksRef.current = [];
                 setLiveText('');
+                setTimeout(() => { if (activeRef.current && !pausedRef.current) startMobileRecorder(); }, 50);
               }
             }, VAD_SILENCE_TIMEOUT);
           }
@@ -265,7 +266,8 @@ export function useVoiceInput(onResult, sttContext = '') {
     if (!ok) { activeRef.current = false; return; }
     setIsListening(true);
     startVADLoop();
-  }, [initMobileAudio, startVADLoop]);
+    startMobileRecorder(); // 말 시작 전부터 녹음 — 첫 단어 잘림 방지
+  }, [initMobileAudio, startVADLoop, startMobileRecorder]);
 
   const stopMobile = useCallback(() => {
     activeRef.current = false;
@@ -297,7 +299,8 @@ export function useVoiceInput(onResult, sttContext = '') {
     pausedRef.current = false;
     isSpeakingVAD.current = false;
     startVADLoop();
-  }, [startVADLoop]);
+    startMobileRecorder(); // TTS 끝나자마자 녹음 시작 — 첫 단어 잘림 방지
+  }, [startVADLoop, startMobileRecorder]);
 
   // 컴포넌트 언마운트 시 오디오 리소스 정리
   useEffect(() => {

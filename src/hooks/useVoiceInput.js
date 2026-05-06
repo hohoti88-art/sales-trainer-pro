@@ -12,7 +12,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 const isMobileAndroid  = /Android/i.test(navigator.userAgent);
-const SILENCE_TIMEOUT  = 5000;
+const isMobileDevice   = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const SILENCE_TIMEOUT  = isMobileDevice ? 2500 : 5000;
 const RESTART_DELAY    = isMobileAndroid ? 700 : 300;
 const DEDUP_WINDOW_MS  = 4000;
 
@@ -70,6 +71,7 @@ export function useVoiceInput(onResult) {
   // ── Audio capture ─────────────────────────────────────────────────────────
 
   const startCapture = useCallback(async () => {
+    if (isMobileDevice) return; // Android: MediaRecorder interferes with SpeechRecognition
     if (isCapturingRef.current) return;
     try {
       if (!streamRef.current || streamRef.current.getTracks().some(t => t.readyState === 'ended')) {
@@ -234,9 +236,7 @@ export function useVoiceInput(onResult) {
       if (generationRef.current !== myGen) return;
       recognitionRef.current = null;
       if (!activeRef.current) return;
-      // [v12] Always restart if active (even when paused).
-      // Chrome permits onend-triggered restarts as session continuation.
-      // This keeps recognition alive without requiring a new user gesture.
+      if (pausedRef.current) return; // TTS 중 AudioFocus 강제 종료 — resumeMic() 때 재시작
       setTimeout(() => {
         if (activeRef.current && generationRef.current === myGen)
           createAndStartRef.current?.();

@@ -144,7 +144,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
     loading, error, setError,
     ttsEnabled, toggleTts,
     isListening, liveText,
-    toggleMic, startMic, stopMic, speakThenResume,
+    toggleMic, startMic, stopMic, pauseMic, speakThenResume,
     sendMessage,
   };
 }

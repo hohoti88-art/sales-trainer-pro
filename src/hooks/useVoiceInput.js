@@ -201,12 +201,11 @@ export function useVoiceInput(onResult) {
 
     const myGen = ++generationRef.current;
     let lastProcessedIndex = -1;
-    let hadResult = false; // this session produced at least one final result
     latestInterimRef.current = '';
 
     const recognition = new SR();
     recognition.lang            = 'ko-KR';
-    recognition.continuous      = isMobileAndroid ? false : true;
+    recognition.continuous      = true;
     recognition.interimResults  = true;
     recognition.maxAlternatives = 1;
 
@@ -223,15 +222,24 @@ export function useVoiceInput(onResult) {
         if (event.results[i].isFinal) {
           if (i > lastProcessedIndex) {
             lastProcessedIndex = i;
-            hadResult = true;
             const t = event.results[i][0].transcript.trim();
             const isDup = isMobileAndroid && t === lastSubmittedTextRef.current &&
               (Date.now() - lastSubmittedTimeRef.current) < DEDUP_WINDOW_MS;
             if (isDup) { resetSubmitTimer(); continue; }
             if (t && t !== lastAddedTextRef.current) {
+              // Chrome Android continuous=true fires rolling transcripts: each new final
+              // result often starts with the previous result's text as a prefix.
+              // Detect this overlap and replace rather than append to avoid duplicates.
+              if (lastAddedTextRef.current && t.startsWith(lastAddedTextRef.current + ' ')) {
+                const prefix = accumulatedRef.current
+                  .slice(0, accumulatedRef.current.lastIndexOf(lastAddedTextRef.current))
+                  .trimEnd();
+                accumulatedRef.current = prefix ? prefix + ' ' + t : t;
+              } else {
+                accumulatedRef.current = accumulatedRef.current
+                  ? accumulatedRef.current + ' ' + t : t;
+              }
               lastAddedTextRef.current = t;
-              accumulatedRef.current = accumulatedRef.current
-                ? accumulatedRef.current + ' ' + t : t;
             }
             latestInterimRef.current = '';
             resetSubmitTimer();
@@ -261,10 +269,6 @@ export function useVoiceInput(onResult) {
       recognitionRef.current = null;
       if (!activeRef.current) return;
       if (pausedRef.current) return;
-      // Android: if this session already captured speech, don't restart — the
-      // submitTimer will flush the text and resumeMic() will restart after AI responds.
-      // This prevents the activation beep that fires on every recognition.start().
-      if (isMobileAndroid && hadResult) return;
       setTimeout(() => {
         if (activeRef.current && generationRef.current === myGen)
           createAndStartRef.current?.();

@@ -1,24 +1,33 @@
-// useVoiceInput v12 — Keep-alive recognition (no stop/restart outside gesture)
+// useVoiceInput v13 — Dual-mode STT
 //
-// v11 → v12 key change:
-//   Chrome blocks recognition.start() outside user-gesture context.
-//   Fix: Never call recognition.stop() in pause(). Recognition stays alive.
-//   onend (Chrome forced) → always restart if active, even when paused.
-//   resume() → only calls createAndStart() if recognition is null.
-//   flushAccumulated → just sets pausedRef=true, does NOT stop recognition.
-//   Result: recognition.start() is only ever called ONCE (within gesture),
-//   and on Chrome-forced onend restarts (which Chrome permits as continuation).
+// Mobile (Android/iOS):
+//   AudioContext AnalyserNode → VAD (volume threshold)
+//   → MediaRecorder (audio capture)
+//   → /api/stt Whisper (GPT-mini transcribe)
+//   SpeechRecognition을 사용하지 않으므로 Chrome 활성음(벨소리) 없음.
+//
+// PC:
+//   SpeechRecognition (continuous) → interim/final text
+//   + MediaRecorder → /api/stt Whisper (최종 정확도 향상)
+//   기존 v12 경로 그대로 유지.
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 
-const isMobileAndroid  = /Android/i.test(navigator.userAgent);
-const isMobileDevice   = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-const SILENCE_TIMEOUT  = isMobileDevice ? 2500 : 5000;
-const RESTART_DELAY    = isMobileAndroid ? 700 : 300;
+const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// ── PC constants ──────────────────────────────────────────────────────────────
+const SILENCE_TIMEOUT  = 5000;
+const RESTART_DELAY    = 300;
 const DEDUP_WINDOW_MS  = 4000;
 const RESUME_GRACE_MS  = 200;
 
-// ── MediaRecorder helpers ─────────────────────────────────────────────────────
+// ── Mobile VAD constants ──────────────────────────────────────────────────────
+const VAD_SPEECH_THRESHOLD  = 20;   // RMS 0-100: 이 값 이상이면 발화로 판단
+const VAD_SILENCE_THRESHOLD = 12;   // RMS 0-100: 이 값 이하면 침묵으로 판단
+const VAD_SILENCE_TIMEOUT   = 2200; // ms 침묵 유지 후 Whisper 전송
+const VAD_MIN_SPEECH_MS     = 500;  // 최소 발화 길이 (짧은 노이즈 무시)
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 function getSupportedMimeType() {
   const candidates = [
@@ -40,17 +49,37 @@ function blobToBase64(blob) {
   });
 }
 
-// ── Hook ─────────────────────────────────────────────────────────────────────
+// ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useVoiceInput(onResult) {
   const [isListening,    setIsListening]    = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [liveText,       setLiveText]       = useState('');
 
+  const activeRef      = useRef(false);
+  const pausedRef      = useRef(false);
+  const onResultRef    = useRef(onResult);
+  useEffect(() => { onResultRef.current = onResult; }, [onResult]);
+
+  // ── Shared audio refs ─────────────────────────────────────────────────────
+  const streamRef         = useRef(null);
+  const mimeTypeRef       = useRef('');
+  const recorderRef       = useRef(null);
+  const audioChunksRef    = useRef([]);
+  const isCapturingRef    = useRef(false);
+  const isTranscribingRef = useRef(false);
+  const lastResumeTimeRef = useRef(0);
+
+  // ── Mobile VAD refs ───────────────────────────────────────────────────────
+  const vadContextRef   = useRef(null);
+  const vadAnalyserRef  = useRef(null);
+  const vadFrameRef     = useRef(null);
+  const isSpeakingVAD   = useRef(false);
+  const silenceVADTimer = useRef(null);
+  const speechStartTime = useRef(0);
+
+  // ── PC SpeechRecognition refs ─────────────────────────────────────────────
   const recognitionRef       = useRef(null);
-  const activeRef            = useRef(false);
-  const pausedRef            = useRef(false);
-  const onResultRef          = useRef(onResult);
   const createAndStartRef    = useRef(null);
   const generationRef        = useRef(0);
   const accumulatedRef       = useRef('');
@@ -60,29 +89,237 @@ export function useVoiceInput(onResult) {
   const lastSubmittedTextRef = useRef('');
   const lastSubmittedTimeRef = useRef(0);
 
-  const streamRef         = useRef(null);
-  const mimeTypeRef       = useRef('');
-  const recorderRef       = useRef(null);
-  const audioChunksRef    = useRef([]);
-  const isCapturingRef    = useRef(false);
-  const isTranscribingRef = useRef(false);
-  const lastResumeTimeRef = useRef(0);
+  // ══════════════════════════════════════════════════════════════════════════
+  // MOBILE PATH: AudioContext VAD → MediaRecorder → Whisper
+  // ══════════════════════════════════════════════════════════════════════════
 
-  useEffect(() => { onResultRef.current = onResult; }, [onResult]);
+  const initMobileAudio = useCallback(async () => {
+    const streamOk = streamRef.current?.active &&
+      !streamRef.current.getTracks().some(t => t.readyState === 'ended');
+    const ctxOk = vadContextRef.current && vadContextRef.current.state !== 'closed';
+    if (streamOk && ctxOk && vadAnalyserRef.current) return true;
 
-  // ── Audio capture ─────────────────────────────────────────────────────────
+    // 기존 context 정리
+    if (vadContextRef.current && vadContextRef.current.state !== 'closed') {
+      try { await vadContextRef.current.close(); } catch { /* ignore */ }
+    }
+    vadContextRef.current = null;
+    vadAnalyserRef.current = null;
 
-  const startCapture = useCallback(async () => {
-    if (isMobileDevice) return; // Android: MediaRecorder interferes with SpeechRecognition
+    try {
+      if (!streamOk) {
+        streamRef.current?.getTracks().forEach(t => t.stop());
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+        });
+        streamRef.current = stream;
+        mimeTypeRef.current = getSupportedMimeType();
+      }
+      const ctx = new AudioContext();
+      await ctx.resume();
+      vadContextRef.current = ctx;
+      const source  = ctx.createMediaStreamSource(streamRef.current);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+      vadAnalyserRef.current = analyser;
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const startMobileRecorder = useCallback(() => {
+    if (isCapturingRef.current || !streamRef.current?.active) return;
+    const mt = mimeTypeRef.current;
+    const recorder = new MediaRecorder(streamRef.current, mt ? { mimeType: mt } : {});
+    recorderRef.current    = recorder;
+    audioChunksRef.current = [];
+    recorder.ondataavailable = (e) => { if (e.data?.size > 0) audioChunksRef.current.push(e.data); };
+    recorder.start(100);
+    isCapturingRef.current = true;
+  }, []);
+
+  const sendMobileAudio = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+    if (isTranscribingRef.current) return;
+
+    isTranscribingRef.current = true;
+    setIsTranscribing(true);
+    isCapturingRef.current = false;
+
+    recorder.onstop = async () => {
+      const chunks   = audioChunksRef.current.splice(0);
+      const mimeType = mimeTypeRef.current || recorder.mimeType || 'audio/webm';
+      const blob     = chunks.length ? new Blob(chunks, { type: mimeType }) : null;
+      try {
+        if (!blob || blob.size < 1000) throw new Error('too short');
+        const base64 = await blobToBase64(blob);
+        const res = await fetch('/api/stt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audio: base64, mimeType, contextPrompt: '' }),
+        });
+        if (!res.ok) throw new Error(`STT ${res.status}`);
+        const { text } = await res.json();
+        setLiveText('');
+        if (text?.trim()) onResultRef.current?.(text.trim());
+      } catch {
+        setLiveText('');
+      } finally {
+        isTranscribingRef.current = false;
+        setIsTranscribing(false);
+      }
+    };
+    recorder.stop();
+  }, []);
+
+  const stopVADLoop = useCallback(() => {
+    if (vadFrameRef.current) {
+      cancelAnimationFrame(vadFrameRef.current);
+      vadFrameRef.current = null;
+    }
+    clearTimeout(silenceVADTimer.current);
+    silenceVADTimer.current = null;
+    isSpeakingVAD.current = false;
+  }, []);
+
+  const startVADLoop = useCallback(() => {
+    if (vadFrameRef.current) return;
+    const analyser = vadAnalyserRef.current;
+    if (!analyser) return;
+
+    const bufLen  = analyser.frequencyBinCount;
+    const dataBuf = new Uint8Array(bufLen);
+
+    const tick = () => {
+      if (!activeRef.current || pausedRef.current) {
+        vadFrameRef.current = null;
+        return;
+      }
+      vadFrameRef.current = requestAnimationFrame(tick);
+
+      // 변환 대기 중에는 VAD 감지만 스킵 (루프는 유지)
+      if (isTranscribingRef.current) return;
+
+      // TTS 잔향 무시 구간
+      if (Date.now() - lastResumeTimeRef.current < 300) return;
+
+      analyser.getByteTimeDomainData(dataBuf);
+      let sumSq = 0;
+      for (let i = 0; i < bufLen; i++) {
+        const n = (dataBuf[i] - 128) / 128;
+        sumSq += n * n;
+      }
+      const rms = Math.sqrt(sumSq / bufLen) * 100;
+
+      if (!isSpeakingVAD.current) {
+        if (rms > VAD_SPEECH_THRESHOLD) {
+          isSpeakingVAD.current   = true;
+          speechStartTime.current = Date.now();
+          clearTimeout(silenceVADTimer.current);
+          silenceVADTimer.current = null;
+          startMobileRecorder();
+          setLiveText('● 녹음 중');
+        }
+      } else {
+        if (rms < VAD_SILENCE_THRESHOLD) {
+          if (!silenceVADTimer.current) {
+            silenceVADTimer.current = setTimeout(() => {
+              silenceVADTimer.current = null;
+              if (!isSpeakingVAD.current) return;
+              isSpeakingVAD.current = false;
+              const dur = Date.now() - speechStartTime.current;
+              if (dur >= VAD_MIN_SPEECH_MS) {
+                setLiveText('');
+                sendMobileAudio();
+              } else {
+                // 너무 짧음 — 노이즈로 판단, 버림
+                const rec = recorderRef.current;
+                if (rec && rec.state !== 'inactive') { rec.onstop = null; rec.stop(); }
+                isCapturingRef.current = false;
+                audioChunksRef.current = [];
+                setLiveText('');
+              }
+            }, VAD_SILENCE_TIMEOUT);
+          }
+        } else {
+          // 아직 말하는 중 — 침묵 타이머 취소
+          clearTimeout(silenceVADTimer.current);
+          silenceVADTimer.current = null;
+        }
+      }
+    };
+
+    vadFrameRef.current = requestAnimationFrame(tick);
+  }, [startMobileRecorder, sendMobileAudio]);
+
+  const startMobile = useCallback(async () => {
+    if (activeRef.current) return;
+    activeRef.current = true;
+    pausedRef.current = false;
+    const ok = await initMobileAudio();
+    if (!ok) { activeRef.current = false; return; }
+    setIsListening(true);
+    startVADLoop();
+  }, [initMobileAudio, startVADLoop]);
+
+  const stopMobile = useCallback(() => {
+    activeRef.current = false;
+    pausedRef.current = false;
+    stopVADLoop();
+    const rec = recorderRef.current;
+    if (rec && rec.state !== 'inactive') { rec.onstop = null; rec.stop(); }
+    isCapturingRef.current = false;
+    audioChunksRef.current = [];
+    setIsListening(false);
+    setLiveText('');
+  }, [stopVADLoop]);
+
+  const pauseMobile = useCallback(() => {
+    pausedRef.current = true;
+    isSpeakingVAD.current = false;
+    clearTimeout(silenceVADTimer.current);
+    silenceVADTimer.current = null;
+    const rec = recorderRef.current;
+    if (rec && rec.state !== 'inactive') { rec.onstop = null; rec.stop(); }
+    isCapturingRef.current = false;
+    audioChunksRef.current = [];
+    setLiveText('');
+  }, []);
+
+  const resumeMobile = useCallback(() => {
+    lastResumeTimeRef.current = Date.now();
+    activeRef.current = true;
+    pausedRef.current = false;
+    isSpeakingVAD.current = false;
+    startVADLoop();
+  }, [startVADLoop]);
+
+  // 컴포넌트 언마운트 시 오디오 리소스 정리
+  useEffect(() => {
+    if (!isMobileDevice) return;
+    return () => {
+      stopVADLoop();
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      if (vadContextRef.current?.state !== 'closed') {
+        vadContextRef.current?.close();
+      }
+    };
+  }, [stopVADLoop]);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PC PATH: SpeechRecognition (continuous) + MediaRecorder → Whisper
+  // ══════════════════════════════════════════════════════════════════════════
+
+  const startCapturePC = useCallback(async () => {
     if (isCapturingRef.current) return;
     try {
       if (!streamRef.current || streamRef.current.getTracks().some(t => t.readyState === 'ended')) {
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl:  false,
-          },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
         });
         streamRef.current = stream;
         mimeTypeRef.current = getSupportedMimeType();
@@ -99,36 +336,37 @@ export function useVoiceInput(onResult) {
     }
   }, []);
 
-  const cancelCapture = useCallback(() => {
+  const cancelCapturePC = useCallback(() => {
     const recorder = recorderRef.current;
-    if (recorder && recorder.state !== 'inactive') {
-      recorder.onstop = null;
-      recorder.stop();
-    }
+    if (recorder && recorder.state !== 'inactive') { recorder.onstop = null; recorder.stop(); }
     isCapturingRef.current = false;
     audioChunksRef.current = [];
   }, []);
 
-  const releaseStream = useCallback(() => {
+  const releaseStreamPC = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
   }, []);
 
-  const sendToWhisper = useCallback((fallbackText) => {
+  const sendToWhisperPC = useCallback((fallbackText) => {
     if (isTranscribingRef.current) return;
     const recorder  = recorderRef.current;
     const capturing = isCapturingRef.current;
 
     if (!recorder || recorder.state === 'inactive' || !capturing) {
+      if (recorder && recorder.state !== 'inactive') { recorder.onstop = null; recorder.stop(); }
+      isCapturingRef.current = false;
+      audioChunksRef.current = [];
+      setLiveText('');
       if (fallbackText) onResultRef.current?.(fallbackText);
       return;
     }
 
     isTranscribingRef.current = true;
     setIsTranscribing(true);
+    isCapturingRef.current = false;
 
     recorder.onstop = async () => {
-      isCapturingRef.current = false;
       const chunks   = audioChunksRef.current.splice(0);
       const mimeType = mimeTypeRef.current || recorder.mimeType || 'audio/webm';
       const blob     = chunks.length ? new Blob(chunks, { type: mimeType }) : null;
@@ -143,7 +381,7 @@ export function useVoiceInput(onResult) {
         if (!res.ok) throw new Error(`STT ${res.status}`);
         const { text } = await res.json();
         setLiveText('');
-        onResultRef.current?.((text?.trim()) || fallbackText || '');
+        onResultRef.current?.(text?.trim() || fallbackText || '');
       } catch {
         setLiveText('');
         if (fallbackText) onResultRef.current?.(fallbackText);
@@ -155,33 +393,29 @@ export function useVoiceInput(onResult) {
     recorder.stop();
   }, []);
 
-  // ── Web Speech API ────────────────────────────────────────────────────────
-
-  const flushAccumulated = useCallback(() => {
+  const flushAccumulatedPC = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     const text = accumulatedRef.current.trim() || latestInterimRef.current.trim();
     accumulatedRef.current   = '';
     latestInterimRef.current = '';
     lastAddedTextRef.current = '';
-    if (text) setLiveText(text); else setLiveText('');
+    setLiveText(text || '');
 
     if (text && activeRef.current && !pausedRef.current) {
       lastSubmittedTextRef.current = text;
       lastSubmittedTimeRef.current = Date.now();
-      // [v12] Don't stop recognition — just pause result processing.
-      // Recognition stays alive so no new gesture is needed to restart.
       pausedRef.current = true;
-      cancelCapture();
-      sendToWhisper(text);
+      cancelCapturePC();
+      sendToWhisperPC(text);
     }
-  }, [sendToWhisper, cancelCapture]);
+  }, [sendToWhisperPC, cancelCapturePC]);
 
-  const resetSubmitTimer = useCallback(() => {
+  const resetSubmitTimerPC = useCallback(() => {
     clearTimeout(submitTimerRef.current);
-    submitTimerRef.current = setTimeout(flushAccumulated, SILENCE_TIMEOUT);
-  }, [flushAccumulated]);
+    submitTimerRef.current = setTimeout(flushAccumulatedPC, SILENCE_TIMEOUT);
+  }, [flushAccumulatedPC]);
 
-  const createAndStart = useCallback(() => {
+  const createAndStartPC = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return;
 
@@ -208,11 +442,10 @@ export function useVoiceInput(onResult) {
           if (i > lastProcessedIndex) {
             lastProcessedIndex = i;
             const t = event.results[i][0].transcript.trim();
-            const isDup = isMobileAndroid && t === lastSubmittedTextRef.current &&
+            const isDup = t === lastSubmittedTextRef.current &&
               (Date.now() - lastSubmittedTimeRef.current) < DEDUP_WINDOW_MS;
-            if (isDup) { resetSubmitTimer(); continue; }
+            if (isDup) { resetSubmitTimerPC(); continue; }
             if (t && t !== lastAddedTextRef.current) {
-              // Android continuous=true: 새 final이 이전 결과를 prefix로 포함하는 경우 replace
               if (lastAddedTextRef.current && t.startsWith(lastAddedTextRef.current + ' ')) {
                 const prefix = accumulatedRef.current
                   .slice(0, accumulatedRef.current.lastIndexOf(lastAddedTextRef.current))
@@ -225,13 +458,13 @@ export function useVoiceInput(onResult) {
               lastAddedTextRef.current = t;
             }
             latestInterimRef.current = '';
-            resetSubmitTimer();
+            resetSubmitTimerPC();
           }
         } else {
           interim += event.results[i][0].transcript;
         }
       }
-      if (interim) resetSubmitTimer();
+      if (interim) resetSubmitTimerPC();
       latestInterimRef.current = interim;
       setLiveText(accumulatedRef.current || interim);
     };
@@ -251,7 +484,7 @@ export function useVoiceInput(onResult) {
       if (generationRef.current !== myGen) return;
       recognitionRef.current = null;
       if (!activeRef.current) return;
-      if (pausedRef.current) return; // TTS 중 AudioFocus 강제 종료 — resumeMic() 때 재시작
+      if (pausedRef.current) return;
       setTimeout(() => {
         if (activeRef.current && generationRef.current === myGen)
           createAndStartRef.current?.();
@@ -266,13 +499,11 @@ export function useVoiceInput(onResult) {
       activeRef.current = false;
       setIsListening(false);
     }
-  }, [resetSubmitTimer, flushAccumulated]);
+  }, [resetSubmitTimerPC, flushAccumulatedPC]);
 
-  createAndStartRef.current = createAndStart;
+  createAndStartRef.current = createAndStartPC;
 
-  // ── Public interface ──────────────────────────────────────────────────────
-
-  const stop = useCallback(() => {
+  const stopPC = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     generationRef.current++;
     activeRef.current = pausedRef.current = false;
@@ -281,50 +512,61 @@ export function useVoiceInput(onResult) {
     recognitionRef.current = null;
     setIsListening(false);
     setLiveText('');
-    cancelCapture();
-    releaseStream();
-  }, [cancelCapture, releaseStream]);
+    cancelCapturePC();
+    releaseStreamPC();
+  }, [cancelCapturePC, releaseStreamPC]);
 
-  const start = useCallback(() => {
+  const startPC = useCallback(() => {
     if (activeRef.current) return;
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     activeRef.current = true;
     pausedRef.current = false;
-    createAndStart();
-    startCapture();
-  }, [createAndStart, startCapture]);
+    createAndStartPC();
+    startCapturePC();
+  }, [createAndStartPC, startCapturePC]);
 
-  // [v12] pause: do NOT stop recognition — just block result processing
-  const pause = useCallback(() => {
+  const pausePC = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     pausedRef.current = true;
-    cancelCapture();
-    // recognition keeps running; results ignored via pausedRef check in onresult
-  }, [cancelCapture]);
+    cancelCapturePC();
+    setLiveText('');
+  }, [cancelCapturePC]);
 
-  // [v12] resume: only restart recognition if it died while paused
-  const resume = useCallback(() => {
+  const resumePC = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     lastResumeTimeRef.current = Date.now();
     activeRef.current = true;
     pausedRef.current = false;
-    if (!recognitionRef.current) {
-      createAndStart(); // restart only if died during pause
-    }
-    startCapture();
-  }, [createAndStart, startCapture]);
+    if (!recognitionRef.current) createAndStartPC();
+    startCapturePC();
+  }, [createAndStartPC, startCapturePC]);
 
-  const toggle = useCallback(() => {
-    if (activeRef.current) stop();
-    else start();
-  }, [stop, start]);
+  // ══════════════════════════════════════════════════════════════════════════
+  // Public interface
+  // ══════════════════════════════════════════════════════════════════════════
+
+  if (isMobileDevice) {
+    return {
+      isListening: isListening || isTranscribing,
+      liveText,
+      toggle: () => { if (activeRef.current) stopMobile(); else startMobile(); },
+      start:  startMobile,
+      stop:   stopMobile,
+      pause:  pauseMobile,
+      resume: resumeMobile,
+    };
+  }
 
   return {
     isListening: isListening || isTranscribing,
     liveText,
-    toggle, start, stop, pause, resume,
+    toggle: () => { if (activeRef.current) stopPC(); else startPC(); },
+    start:  startPC,
+    stop:   stopPC,
+    pause:  pausePC,
+    resume: resumePC,
   };
 }

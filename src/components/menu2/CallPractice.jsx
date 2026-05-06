@@ -33,7 +33,7 @@ export default function CallPractice() {
     loading, error,
     ttsEnabled, toggleTts,
     isListening, liveText,
-    toggleMic, startMic, stopMic, speakThenResume,
+    toggleMic, startMic, stopMic, pauseMic, speakThenResume,
     sendMessage,
   } = useVoiceChat({
     chatRef,
@@ -86,7 +86,8 @@ export default function CallPractice() {
 
   async function handleStartCall() {
     unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
-    startMic(); // [v12] start recognition within gesture context
+    startMic(); // [v12] 제스처 컨텍스트 내에서 recognition 시작
+    pauseMic(); // 전화벨/API 로딩 중 ambient noise 차단
     setStartLoading(true);
     try {
       const chat = await startPersonaChat(form.product, form.profile + ' (1~2문장으로 짧게 응답)', personality, form.painPoints, 'call');

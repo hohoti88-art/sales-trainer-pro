@@ -28,7 +28,7 @@ export default function SpeechPractice() {
     loading, error,
     ttsEnabled, toggleTts,
     isListening, liveText,
-    toggleMic, startMic, stopMic, speakThenResume,
+    toggleMic, startMic, stopMic, pauseMic, speakThenResume,
     sendMessage,
   } = useVoiceChat({
     chatRef,
@@ -60,7 +60,8 @@ export default function SpeechPractice() {
       return;
     }
     unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
-    startMic(); // [v12] start recognition within gesture context (before any await)
+    startMic(); // [v12] 제스처 컨텍스트 내에서 recognition 시작
+    pauseMic(); // API 로딩 중 ambient noise가 메시지로 전송되는 것을 차단
     setStartLoading(true);
     setStartError('');
     try {

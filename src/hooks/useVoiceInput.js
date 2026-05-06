@@ -16,9 +16,9 @@ const isMobileDevice   = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 const SILENCE_TIMEOUT  = 5000;
 const RESTART_DELAY    = isMobileAndroid ? 700 : 300;
 const DEDUP_WINDOW_MS  = 4000;
-// TTS 재생 후 resumeMic() 직후 음성인식 결과를 무시하는 유예 기간
-// 모바일에서 TTS 잔향이 Web Speech API에 에코로 잡히는 것을 방지
-const RESUME_GRACE_MS  = isMobileDevice ? 2000 : 0;
+// TTS 종료 후 resumeMic() 직후 잔향 에코 방지용 짧은 유예 기간
+// 2000ms는 과도해 사용자 발화를 차단함 → 200ms로 최소화
+const RESUME_GRACE_MS  = 200;
 
 // ── MediaRecorder helpers ─────────────────────────────────────────────────────
 
@@ -117,23 +117,31 @@ export function useVoiceInput(onResult) {
 
   const sendToWhisper = useCallback((fallbackText) => {
     if (isTranscribingRef.current) return;
+
     const recorder  = recorderRef.current;
     const capturing = isCapturingRef.current;
 
+    // recorder가 inactive이거나 캡처 중이 아니면 Web Speech fallback 사용
     if (!recorder || recorder.state === 'inactive' || !capturing) {
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.onstop = null;
+        recorder.stop();
+      }
+      isCapturingRef.current = false;
+      audioChunksRef.current = [];
       if (fallbackText) onResultRef.current?.(fallbackText);
       return;
     }
 
     isTranscribingRef.current = true;
     setIsTranscribing(true);
+    isCapturingRef.current = false; // 중복 캡처 방지
 
+    // recorder.stop() → ondataavailable(마지막 청크) → onstop 순서로 실행됨
     recorder.onstop = async () => {
-      isCapturingRef.current = false;
       const chunks   = audioChunksRef.current.splice(0);
       const mimeType = mimeTypeRef.current || recorder.mimeType || 'audio/webm';
       const blob     = chunks.length ? new Blob(chunks, { type: mimeType }) : null;
-      // 모바일은 1000bytes, PC는 3000bytes — 모바일은 짧은 발화도 Whisper로 처리
       const MIN_BLOB = isMobileDevice ? 1000 : 3000;
       try {
         if (!blob || blob.size < MIN_BLOB) throw new Error('no audio');
@@ -146,18 +154,17 @@ export function useVoiceInput(onResult) {
         if (!res.ok) throw new Error(`STT ${res.status}`);
         const { text } = await res.json();
         setLiveText('');
-        onResultRef.current?.((text?.trim()) || fallbackText || '');
+        onResultRef.current?.(text?.trim() || fallbackText || '');
       } catch {
         setLiveText('');
-        // 모바일에서 Whisper 실패 시 Web Speech API 텍스트(에코 가능성)를 fallback으로 쓰지 않음
-        // PC에서는 fallback 허용
-        if (!isMobileDevice && fallbackText) onResultRef.current?.(fallbackText);
+        // Whisper 실패 시 Web Speech API 텍스트를 fallback으로 사용
+        if (fallbackText) onResultRef.current?.(fallbackText);
       } finally {
         isTranscribingRef.current = false;
         setIsTranscribing(false);
       }
     };
-    recorder.stop();
+    recorder.stop(); // ondataavailable + onstop 순으로 발화
   }, []);
 
   // ── Web Speech API ────────────────────────────────────────────────────────
@@ -173,13 +180,13 @@ export function useVoiceInput(onResult) {
     if (text && activeRef.current && !pausedRef.current) {
       lastSubmittedTextRef.current = text;
       lastSubmittedTimeRef.current = Date.now();
-      // [v12] Don't stop recognition — just pause result processing.
-      // Recognition stays alive so no new gesture is needed to restart.
       pausedRef.current = true;
-      cancelCapture();
+      // cancelCapture()를 여기서 호출하지 않음 — sendToWhisper가 recorder를 직접 stop함
+      // 기존 방식은 cancelCapture 후 sendToWhisper를 호출해 isCapturingRef=false로
+      // 만들어 Whisper early-return이 발생, 실제 오디오가 전달되지 않는 버그가 있었음
       sendToWhisper(text);
     }
-  }, [sendToWhisper, cancelCapture]);
+  }, [sendToWhisper]);
 
   const resetSubmitTimer = useCallback(() => {
     clearTimeout(submitTimerRef.current);

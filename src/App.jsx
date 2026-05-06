@@ -19,7 +19,7 @@ export default function App() {
         <Route path="/speech" element={<SpeechPractice />} />
         <Route path="/call" element={<CallPractice />} />
         <Route path="/upsell" element={<UpsellStrategy />} />
-        <Route path="/customer" element={<CustomerExpand />} />
+        <Route path="/expand" element={<CustomerExpand />} />
       </Routes>
     </BrowserRouter>
   );

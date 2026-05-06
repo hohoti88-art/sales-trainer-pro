@@ -66,8 +66,8 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
             if (getIsSpeaking()) {
               setTimeout(pollAndResume, 300);
             } else {
-              // 모바일: TTS 잔향 소멸 + 에코 유예기간을 위해 2000ms 대기
-              setTimeout(resumeMic, 2000);
+              // 모바일: TTS 잔향 소멸 + grace period(200ms)를 위해 1000ms 대기
+              setTimeout(resumeMic, 1000);
             }
           };
           setTimeout(pollAndResume, 100);
@@ -145,7 +145,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
     loading, error, setError,
     ttsEnabled, toggleTts,
     isListening, liveText,
-    toggleMic, startMic, stopMic, speakThenResume,
+    toggleMic, startMic, stopMic, pauseMic, speakThenResume,
     sendMessage,
   };
 }

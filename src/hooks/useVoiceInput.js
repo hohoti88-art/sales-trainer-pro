@@ -311,10 +311,12 @@ export function useVoiceInput(onResult) {
 
   // [v12] resume: only restart recognition if it died while paused
   const resume = useCallback(() => {
-    if (!activeRef.current) return; // 마이크가 한 번도 시작되지 않은 상태면 무시
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     lastResumeTimeRef.current = Date.now(); // grace period 시작 — TTS 잔향 에코 방지
+    // Chrome이 TTS AudioFocus로 recognition을 강제 종료하면 onerror → activeRef=false.
+    // 반드시 true로 복구해야 onresult/onend 핸들러가 계속 동작한다.
+    activeRef.current = true;
     pausedRef.current = false;
     if (!recognitionRef.current) {
       createAndStart(); // restart only if died during pause

@@ -201,11 +201,12 @@ export function useVoiceInput(onResult) {
 
     const myGen = ++generationRef.current;
     let lastProcessedIndex = -1;
+    let hadResult = false; // this session produced at least one final result
     latestInterimRef.current = '';
 
     const recognition = new SR();
     recognition.lang            = 'ko-KR';
-    recognition.continuous      = true;
+    recognition.continuous      = isMobileAndroid ? false : true;
     recognition.interimResults  = true;
     recognition.maxAlternatives = 1;
 
@@ -222,6 +223,7 @@ export function useVoiceInput(onResult) {
         if (event.results[i].isFinal) {
           if (i > lastProcessedIndex) {
             lastProcessedIndex = i;
+            hadResult = true;
             const t = event.results[i][0].transcript.trim();
             const isDup = isMobileAndroid && t === lastSubmittedTextRef.current &&
               (Date.now() - lastSubmittedTimeRef.current) < DEDUP_WINDOW_MS;
@@ -258,9 +260,11 @@ export function useVoiceInput(onResult) {
       if (generationRef.current !== myGen) return;
       recognitionRef.current = null;
       if (!activeRef.current) return;
-      // TTS 재생 중(paused)에는 재시작 금지 — Android AudioFocus 충돌로 TTS가 떨리고 벨소리 발생.
-      // resumeMic()이 TTS 종료 후 recognition을 다시 시작한다.
       if (pausedRef.current) return;
+      // Android: if this session already captured speech, don't restart — the
+      // submitTimer will flush the text and resumeMic() will restart after AI responds.
+      // This prevents the activation beep that fires on every recognition.start().
+      if (isMobileAndroid && hadResult) return;
       setTimeout(() => {
         if (activeRef.current && generationRef.current === myGen)
           createAndStartRef.current?.();

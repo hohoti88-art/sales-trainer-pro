@@ -181,10 +181,9 @@ export function useVoiceInput(onResult) {
       lastSubmittedTextRef.current = text;
       lastSubmittedTimeRef.current = Date.now();
       pausedRef.current = true;
-      cancelCapture(); // 녹음 중단 후 sendToWhisper 호출 — capturing=false이므로 Web Speech 텍스트 fallback 사용
-      sendToWhisper(text);
+      sendToWhisper(text); // recorder가 살아있으면 Whisper 전송, inactive면 Web Speech 텍스트 fallback
     }
-  }, [sendToWhisper, cancelCapture]);
+  }, [sendToWhisper]);
 
   const resetSubmitTimer = useCallback(() => {
     clearTimeout(submitTimerRef.current);

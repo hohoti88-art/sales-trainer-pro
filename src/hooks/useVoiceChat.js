@@ -59,24 +59,27 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   //           → false 확인 후 1000ms 추가 대기 → resumeMic() (잔향 소멸 여유)
   function speakThenResume(text) {
     if (ttsEnabledRef.current) {
-      pauseMic(); // block mic results during TTS (recognition keeps running)
+      pauseMic();
       setTimeout(() => speak(text, personality, profile, () => {
         if (isMobileDevice) {
-          const pollAndResume = () => {
+          const pollAndStop = () => {
             if (getIsSpeaking()) {
-              setTimeout(pollAndResume, 300);
+              setTimeout(pollAndStop, 300);
             } else {
-              // 모바일: TTS 잔향 소멸 + grace period(200ms)를 위해 1000ms 대기
-              setTimeout(resumeMic, 1000);
+              // 모바일 push-to-talk: TTS 종료 후 마이크를 완전히 끔.
+              // 사용자가 하단 빨간 버튼을 직접 탭해야만 마이크가 켜짐.
+              // 자동 재활성화를 없애면 Android 활성화 beep과 OS 마이크 아이콘 깜빡임이 사라짐.
+              setTimeout(stopMic, 500);
             }
           };
-          setTimeout(pollAndResume, 100);
+          setTimeout(pollAndStop, 100);
         } else {
           setTimeout(resumeMic, 800);
         }
       }), 300);
     } else {
-      resumeMic();
+      if (isMobileDevice) stopMic();
+      else resumeMic();
     }
   }
 

@@ -200,26 +200,28 @@ export function unlockAudio() {
     setTimeout(() => stream.getTracks().forEach(t => t.stop()), 500);
   }).catch(() => {});
 
-  // 3. Web Speech API (폴백용) 잠금 해제
-  if (window.speechSynthesis) {
+  // 3. Web Speech API (폴백용) 잠금 해제 — PC 전용 (모바일은 Web Speech TTS 사용 안 함)
+  if (!isMobile && window.speechSynthesis) {
     const u = new SpeechSynthesisUtterance('');
     u.volume = 0; u.rate = 10;
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(u);
   }
 
-  // 4. SpeechRecognition 사전 잠금 해제 — 사용자 제스처 컨텍스트에서 start()를 한 번 호출해두면
-  //    이후 TTS 종료 후 자동 resumeMic() → recognition.start() 도 허용됨 (Chrome 정책)
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (SR) {
-    try {
-      const primer = new SR();
-      primer.continuous = false;
-      primer.onend   = () => {};
-      primer.onerror = () => {};
-      primer.start();
-      setTimeout(() => { try { primer.abort(); } catch {} }, 200);
-    } catch {}
+  // 4. SpeechRecognition 사전 잠금 해제 — PC 전용
+  //    모바일 v13은 SpeechRecognition을 사용하지 않으므로 primer 불필요 (Chrome 활성음 방지)
+  if (!isMobile) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      try {
+        const primer = new SR();
+        primer.continuous = false;
+        primer.onend   = () => {};
+        primer.onerror = () => {};
+        primer.start();
+        setTimeout(() => { try { primer.abort(); } catch {} }, 200);
+      } catch {}
+    }
   }
 }
 

@@ -86,7 +86,7 @@ export default function CallPractice() {
 
   async function handleStartCall() {
     unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
-    startMic(); // [v12] 제스처 컨텍스트 내에서 recognition 시작
+    startMic(); // 제스처 컨텍스트 내 AudioContext 초기화 (모바일 VAD용)
     pauseMic(); // 전화벨/API 로딩 중 ambient noise 차단
     setStartLoading(true);
     try {

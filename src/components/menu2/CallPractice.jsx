@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Phone, ChevronDown, ChevronUp, Loader2, Volume2 } from 'lucide-react';
+import { Phone, ChevronDown, ChevronUp, Loader2, Volume2, User } from 'lucide-react';
 import NavBar from '../NavBar';
 import FeedbackModal from '../FeedbackModal';
 import { generateCallScript, startPersonaChat, generateFeedback } from '../../services/geminiService';

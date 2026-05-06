@@ -181,12 +181,10 @@ export function useVoiceInput(onResult) {
       lastSubmittedTextRef.current = text;
       lastSubmittedTimeRef.current = Date.now();
       pausedRef.current = true;
-      // cancelCapture()를 여기서 호출하지 않음 — sendToWhisper가 recorder를 직접 stop함
-      // 기존 방식은 cancelCapture 후 sendToWhisper를 호출해 isCapturingRef=false로
-      // 만들어 Whisper early-return이 발생, 실제 오디오가 전달되지 않는 버그가 있었음
+      cancelCapture(); // 녹음 중단 후 sendToWhisper 호출 — capturing=false이므로 Web Speech 텍스트 fallback 사용
       sendToWhisper(text);
     }
-  }, [sendToWhisper]);
+  }, [sendToWhisper, cancelCapture]);
 
   const resetSubmitTimer = useCallback(() => {
     clearTimeout(submitTimerRef.current);
@@ -313,10 +311,10 @@ export function useVoiceInput(onResult) {
 
   // [v12] resume: only restart recognition if it died while paused
   const resume = useCallback(() => {
+    if (!activeRef.current) return; // 마이크가 한 번도 시작되지 않은 상태면 무시
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     lastResumeTimeRef.current = Date.now(); // grace period 시작 — TTS 잔향 에코 방지
-    activeRef.current = true;
     pausedRef.current = false;
     if (!recognitionRef.current) {
       createAndStart(); // restart only if died during pause

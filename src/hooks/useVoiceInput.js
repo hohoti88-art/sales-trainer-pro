@@ -76,6 +76,10 @@ export function useVoiceInput(onResult) {
   // ── Audio capture ─────────────────────────────────────────────────────────
 
   const startCapture = useCallback(async () => {
+    // Android: getUserMedia stream interferes with SpeechRecognition's internal
+    // audio capture, causing recognition to cycle without detecting any speech.
+    // On mobile, skip MediaRecorder entirely and rely on Web Speech API text.
+    if (isMobileDevice) return;
     if (isCapturingRef.current) return;
     try {
       if (!streamRef.current || streamRef.current.getTracks().some(t => t.readyState === 'ended')) {

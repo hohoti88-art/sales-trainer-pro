@@ -312,17 +312,15 @@ export function useVoiceInput(onResult) {
     startCapture();
   }, [createAndStart, startCapture]);
 
-  // [v13] pause: abort recognition to flush audio buffer — prevents TTS echo on resume.
-  // generationRef++ invalidates all pending onend/onerror callbacks from the aborted session.
+  // pause: block result processing only — do NOT abort recognition.
+  // Keeping recognition alive during TTS means Android OS mic icon stays visible
+  // and no recognition.start() restart beep is needed after TTS.
+  // If Android AudioFocus kills recognition anyway, onend returns early (pausedRef=true)
+  // and resumeMic() restarts it once — one beep at most per AI turn.
   const pause = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     pausedRef.current = true;
-    generationRef.current++;
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch {}
-      recognitionRef.current = null;
-    }
     cancelCapture();
     setLiveText('');
   }, [cancelCapture]);

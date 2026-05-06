@@ -68,7 +68,15 @@ async function speakAzure(cleaned, gender, safeEnd) {
     };
     // 60s hard cap — should never fire for normal TTS but prevents zombie promises
     const fallback = setTimeout(() => { cleanup(); safeEnd(); resolve(); }, 60000);
-    el.onended = () => { clearTimeout(fallback); cleanup(); safeEnd(); resolve(); };
+    el.onended = () => {
+      clearTimeout(fallback);
+      cleanup();
+      // Mobile: Android Chrome fires onended before audio physically stops playing.
+      // 700ms buffer prevents resumeMic() from activating while TTS echo is still audible,
+      // which would cause the recognizer to capture TTS audio as user speech → stopSpeaking() → TTS cut off.
+      if (isMobile) { setTimeout(() => { safeEnd(); resolve(); }, 700); }
+      else { safeEnd(); resolve(); }
+    };
     el.onerror = () => { clearTimeout(fallback); cleanup(); reject(new Error('audio error')); };
     el.play().catch(reject);
   });

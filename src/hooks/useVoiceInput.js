@@ -13,7 +13,8 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 
 const isMobileAndroid  = /Android/i.test(navigator.userAgent);
 const isMobileDevice   = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-const SILENCE_TIMEOUT  = 5000;
+// Mobile(Android): continuous=false라서 발화 끝나면 인식 즉시 종료 → 5초 대기는 과도함
+const SILENCE_TIMEOUT  = isMobileDevice ? 2500 : 5000;
 const RESTART_DELAY    = isMobileAndroid ? 700 : 300;
 const DEDUP_WINDOW_MS  = 4000;
 // TTS 종료 후 resumeMic() 직후 잔향 에코 방지용 짧은 유예 기간

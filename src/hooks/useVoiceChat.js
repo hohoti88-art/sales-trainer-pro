@@ -66,7 +66,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
             if (getIsSpeaking()) {
               setTimeout(pollAndResume, 300);
             } else {
-              setTimeout(resumeMic, 1000);
+              setTimeout(resumeMic, 200);
             }
           };
           setTimeout(pollAndResume, 100);

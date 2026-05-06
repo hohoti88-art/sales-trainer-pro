@@ -24,7 +24,7 @@ const RESUME_GRACE_MS  = 200;
 // ── Mobile VAD constants ──────────────────────────────────────────────────────
 const VAD_SPEECH_THRESHOLD  = 20;   // RMS 0-100: 이 값 이상이면 발화로 판단
 const VAD_SILENCE_THRESHOLD = 12;   // RMS 0-100: 이 값 이하면 침묵으로 판단
-const VAD_SILENCE_TIMEOUT   = 2200; // ms 침묵 유지 후 Whisper 전송
+const VAD_SILENCE_TIMEOUT   = 3300; // ms 침묵 유지 후 Whisper 전송
 const VAD_MIN_SPEECH_MS     = 500;  // 최소 발화 길이 (짧은 노이즈 무시)
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -222,7 +222,6 @@ export function useVoiceInput(onResult) {
           clearTimeout(silenceVADTimer.current);
           silenceVADTimer.current = null;
           startMobileRecorder();
-          setLiveText('● 녹음 중');
         }
       } else {
         if (rms < VAD_SILENCE_THRESHOLD) {

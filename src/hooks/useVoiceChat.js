@@ -59,7 +59,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   //           → false 확인 후 1000ms 추가 대기 → resumeMic() (잔향 소멸 여유)
   function speakThenResume(text) {
     if (ttsEnabledRef.current) {
-      pauseMic();
+      pauseMic(); // block mic results during TTS (recognition keeps running)
       setTimeout(() => speak(text, personality, profile, () => {
         if (isMobileDevice) {
           const pollAndResume = () => {
@@ -82,11 +82,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   async function sendMessage(text) {
     const isFromVoice = !!text;
     const rawMsg = text?.trim() || input.trim();
-    if (!rawMsg || processingRef.current) {
-      // 음성 경로에서 flushAccumulated가 pausedRef=true로 설정한 상태를 복원
-      if (isFromVoice) resumeMic();
-      return;
-    }
+    if (!rawMsg || processingRef.current) return; // processingRef: React state보다 빠른 중복 차단
     processingRef.current = true;
 
     // 안전 타임아웃: 네트워크 오류 등으로 processingRef가 영구 잠금되는 것을 방지
@@ -148,7 +144,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
     loading, error, setError,
     ttsEnabled, toggleTts,
     isListening, liveText,
-    toggleMic, startMic, stopMic, pauseMic, speakThenResume,
+    toggleMic, startMic, stopMic, speakThenResume,
     sendMessage,
   };
 }

@@ -68,15 +68,7 @@ async function speakAzure(cleaned, gender, safeEnd) {
     };
     // 60s hard cap — should never fire for normal TTS but prevents zombie promises
     const fallback = setTimeout(() => { cleanup(); safeEnd(); resolve(); }, 60000);
-    el.onended = () => {
-      clearTimeout(fallback);
-      // Mobile: Android Chrome fires onended before audio physically stops playing.
-      // Delay cleanup() AND safeEnd() together so the Blob URL is not revoked
-      // while audio is still streaming — premature revocation triggers onerror
-      // → Web Speech TTS fallback starts → "끊겼다 이어지는" gap.
-      if (isMobile) { setTimeout(() => { cleanup(); safeEnd(); resolve(); }, 700); }
-      else { cleanup(); safeEnd(); resolve(); }
-    };
+    el.onended = () => { clearTimeout(fallback); cleanup(); safeEnd(); resolve(); };
     el.onerror = () => { clearTimeout(fallback); cleanup(); reject(new Error('audio error')); };
     el.play().catch(reject);
   });

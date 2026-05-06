@@ -12,14 +12,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 const isMobileAndroid  = /Android/i.test(navigator.userAgent);
-const isMobileDevice   = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-// Mobile(Android): continuous=false라서 발화 끝나면 인식 즉시 종료 → 5초 대기는 과도함
-const SILENCE_TIMEOUT  = isMobileDevice ? 2500 : 5000;
+const SILENCE_TIMEOUT  = 5000;
 const RESTART_DELAY    = isMobileAndroid ? 700 : 300;
 const DEDUP_WINDOW_MS  = 4000;
-// TTS 종료 후 resumeMic() 직후 잔향 에코 방지용 짧은 유예 기간
-// 2000ms는 과도해 사용자 발화를 차단함 → 200ms로 최소화
-const RESUME_GRACE_MS  = 200;
 
 // ── MediaRecorder helpers ─────────────────────────────────────────────────────
 
@@ -69,17 +64,12 @@ export function useVoiceInput(onResult) {
   const audioChunksRef    = useRef([]);
   const isCapturingRef    = useRef(false);
   const isTranscribingRef = useRef(false);
-  const lastResumeTimeRef = useRef(0); // resumeMic() 호출 시각 — grace period 계산에 사용
 
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
 
   // ── Audio capture ─────────────────────────────────────────────────────────
 
   const startCapture = useCallback(async () => {
-    // Android: getUserMedia stream interferes with SpeechRecognition's internal
-    // audio capture, causing recognition to cycle without detecting any speech.
-    // On mobile, skip MediaRecorder entirely and rely on Web Speech API text.
-    if (isMobileDevice) return;
     if (isCapturingRef.current) return;
     try {
       if (!streamRef.current || streamRef.current.getTracks().some(t => t.readyState === 'ended')) {
@@ -122,34 +112,24 @@ export function useVoiceInput(onResult) {
 
   const sendToWhisper = useCallback((fallbackText) => {
     if (isTranscribingRef.current) return;
-
     const recorder  = recorderRef.current;
     const capturing = isCapturingRef.current;
 
-    // recorder가 inactive이거나 캡처 중이 아니면 Web Speech fallback 사용
     if (!recorder || recorder.state === 'inactive' || !capturing) {
-      if (recorder && recorder.state !== 'inactive') {
-        recorder.onstop = null;
-        recorder.stop();
-      }
-      isCapturingRef.current = false;
-      audioChunksRef.current = [];
       if (fallbackText) onResultRef.current?.(fallbackText);
       return;
     }
 
     isTranscribingRef.current = true;
     setIsTranscribing(true);
-    isCapturingRef.current = false; // 중복 캡처 방지
 
-    // recorder.stop() → ondataavailable(마지막 청크) → onstop 순서로 실행됨
     recorder.onstop = async () => {
+      isCapturingRef.current = false;
       const chunks   = audioChunksRef.current.splice(0);
       const mimeType = mimeTypeRef.current || recorder.mimeType || 'audio/webm';
       const blob     = chunks.length ? new Blob(chunks, { type: mimeType }) : null;
-      const MIN_BLOB = isMobileDevice ? 1000 : 3000;
       try {
-        if (!blob || blob.size < MIN_BLOB) throw new Error('no audio');
+        if (!blob || blob.size < 3000) throw new Error('no audio');
         const base64 = await blobToBase64(blob);
         const res = await fetch('/api/stt', {
           method: 'POST',
@@ -159,17 +139,16 @@ export function useVoiceInput(onResult) {
         if (!res.ok) throw new Error(`STT ${res.status}`);
         const { text } = await res.json();
         setLiveText('');
-        onResultRef.current?.(text?.trim() || fallbackText || '');
+        onResultRef.current?.((text?.trim()) || fallbackText || '');
       } catch {
         setLiveText('');
-        // Whisper 실패 시 Web Speech API 텍스트를 fallback으로 사용
         if (fallbackText) onResultRef.current?.(fallbackText);
       } finally {
         isTranscribingRef.current = false;
         setIsTranscribing(false);
       }
     };
-    recorder.stop(); // ondataavailable + onstop 순으로 발화
+    recorder.stop();
   }, []);
 
   // ── Web Speech API ────────────────────────────────────────────────────────
@@ -185,10 +164,13 @@ export function useVoiceInput(onResult) {
     if (text && activeRef.current && !pausedRef.current) {
       lastSubmittedTextRef.current = text;
       lastSubmittedTimeRef.current = Date.now();
+      // [v12] Don't stop recognition — just pause result processing.
+      // Recognition stays alive so no new gesture is needed to restart.
       pausedRef.current = true;
-      sendToWhisper(text); // recorder가 살아있으면 Whisper 전송, inactive면 Web Speech 텍스트 fallback
+      cancelCapture();
+      sendToWhisper(text);
     }
-  }, [sendToWhisper]);
+  }, [sendToWhisper, cancelCapture]);
 
   const resetSubmitTimer = useCallback(() => {
     clearTimeout(submitTimerRef.current);
@@ -205,18 +187,12 @@ export function useVoiceInput(onResult) {
 
     const recognition = new SR();
     recognition.lang            = 'ko-KR';
-    recognition.continuous      = true;
+    recognition.continuous      = isMobileAndroid ? false : true;
     recognition.interimResults  = true;
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event) => {
       if (!activeRef.current || generationRef.current !== myGen || pausedRef.current) return;
-      // TTS 종료 후 grace period 동안 결과 무시 — 에코(TTS 잔향) 방지
-      if (RESUME_GRACE_MS > 0 && Date.now() - lastResumeTimeRef.current < RESUME_GRACE_MS) {
-        accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
-        setLiveText('');
-        return;
-      }
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         if (event.results[i].isFinal) {
@@ -227,19 +203,9 @@ export function useVoiceInput(onResult) {
               (Date.now() - lastSubmittedTimeRef.current) < DEDUP_WINDOW_MS;
             if (isDup) { resetSubmitTimer(); continue; }
             if (t && t !== lastAddedTextRef.current) {
-              // Chrome Android continuous=true fires rolling transcripts: each new final
-              // result often starts with the previous result's text as a prefix.
-              // Detect this overlap and replace rather than append to avoid duplicates.
-              if (lastAddedTextRef.current && t.startsWith(lastAddedTextRef.current + ' ')) {
-                const prefix = accumulatedRef.current
-                  .slice(0, accumulatedRef.current.lastIndexOf(lastAddedTextRef.current))
-                  .trimEnd();
-                accumulatedRef.current = prefix ? prefix + ' ' + t : t;
-              } else {
-                accumulatedRef.current = accumulatedRef.current
-                  ? accumulatedRef.current + ' ' + t : t;
-              }
               lastAddedTextRef.current = t;
+              accumulatedRef.current = accumulatedRef.current
+                ? accumulatedRef.current + ' ' + t : t;
             }
             latestInterimRef.current = '';
             resetSubmitTimer();
@@ -268,7 +234,9 @@ export function useVoiceInput(onResult) {
       if (generationRef.current !== myGen) return;
       recognitionRef.current = null;
       if (!activeRef.current) return;
-      if (pausedRef.current) return;
+      // [v12] Always restart if active (even when paused).
+      // Chrome permits onend-triggered restarts as session continuation.
+      // This keeps recognition alive without requiring a new user gesture.
       setTimeout(() => {
         if (activeRef.current && generationRef.current === myGen)
           createAndStartRef.current?.();
@@ -312,29 +280,23 @@ export function useVoiceInput(onResult) {
     startCapture();
   }, [createAndStart, startCapture]);
 
-  // pause: block result processing only — do NOT abort recognition.
-  // Keeping recognition alive during TTS means Android OS mic icon stays visible
-  // and no recognition.start() restart beep is needed after TTS.
-  // If Android AudioFocus kills recognition anyway, onend returns early (pausedRef=true)
-  // and resumeMic() restarts it once — one beep at most per AI turn.
+  // [v12] pause: do NOT stop recognition — just block result processing
   const pause = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     pausedRef.current = true;
     cancelCapture();
-    setLiveText('');
+    // recognition keeps running; results ignored via pausedRef check in onresult
   }, [cancelCapture]);
 
-  // [v13] resume: always create fresh recognition (aborted in pause).
-  // Fresh start clears any internal audio buffer → no TTS echo.
+  // [v12] resume: only restart recognition if it died while paused
   const resume = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
-    lastResumeTimeRef.current = Date.now();
     activeRef.current = true;
     pausedRef.current = false;
     if (!recognitionRef.current) {
-      createAndStart();
+      createAndStart(); // restart only if died during pause
     }
     startCapture();
   }, [createAndStart, startCapture]);

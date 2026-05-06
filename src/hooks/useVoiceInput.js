@@ -16,6 +16,7 @@ const isMobileDevice   = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 const SILENCE_TIMEOUT  = isMobileDevice ? 2500 : 5000;
 const RESTART_DELAY    = isMobileAndroid ? 700 : 300;
 const DEDUP_WINDOW_MS  = 4000;
+const RESUME_GRACE_MS  = 200;
 
 // ── MediaRecorder helpers ─────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ export function useVoiceInput(onResult) {
   const audioChunksRef    = useRef([]);
   const isCapturingRef    = useRef(false);
   const isTranscribingRef = useRef(false);
+  const lastResumeTimeRef = useRef(0);
 
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
 
@@ -189,12 +191,17 @@ export function useVoiceInput(onResult) {
 
     const recognition = new SR();
     recognition.lang            = 'ko-KR';
-    recognition.continuous      = isMobileAndroid ? false : true;
+    recognition.continuous      = true;
     recognition.interimResults  = true;
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event) => {
       if (!activeRef.current || generationRef.current !== myGen || pausedRef.current) return;
+      if (RESUME_GRACE_MS > 0 && Date.now() - lastResumeTimeRef.current < RESUME_GRACE_MS) {
+        accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
+        setLiveText('');
+        return;
+      }
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         if (event.results[i].isFinal) {
@@ -205,9 +212,17 @@ export function useVoiceInput(onResult) {
               (Date.now() - lastSubmittedTimeRef.current) < DEDUP_WINDOW_MS;
             if (isDup) { resetSubmitTimer(); continue; }
             if (t && t !== lastAddedTextRef.current) {
+              // Android continuous=true: 새 final이 이전 결과를 prefix로 포함하는 경우 replace
+              if (lastAddedTextRef.current && t.startsWith(lastAddedTextRef.current + ' ')) {
+                const prefix = accumulatedRef.current
+                  .slice(0, accumulatedRef.current.lastIndexOf(lastAddedTextRef.current))
+                  .trimEnd();
+                accumulatedRef.current = prefix ? prefix + ' ' + t : t;
+              } else {
+                accumulatedRef.current = accumulatedRef.current
+                  ? accumulatedRef.current + ' ' + t : t;
+              }
               lastAddedTextRef.current = t;
-              accumulatedRef.current = accumulatedRef.current
-                ? accumulatedRef.current + ' ' + t : t;
             }
             latestInterimRef.current = '';
             resetSubmitTimer();
@@ -293,6 +308,7 @@ export function useVoiceInput(onResult) {
   const resume = useCallback(() => {
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
+    lastResumeTimeRef.current = Date.now();
     activeRef.current = true;
     pausedRef.current = false;
     if (!recognitionRef.current) {

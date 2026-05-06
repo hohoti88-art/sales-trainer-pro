@@ -82,7 +82,10 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   async function sendMessage(text) {
     const isFromVoice = !!text;
     const rawMsg = text?.trim() || input.trim();
-    if (!rawMsg || processingRef.current) return; // processingRef: React state보다 빠른 중복 차단
+    if (!rawMsg || processingRef.current) {
+      if (isFromVoice) resumeMic();
+      return;
+    }
     processingRef.current = true;
 
     // 안전 타임아웃: 네트워크 오류 등으로 processingRef가 영구 잠금되는 것을 방지

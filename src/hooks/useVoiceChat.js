@@ -36,7 +36,8 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
     stop: stopMic,
     pause: pauseMic,
     resume: resumeMic,
-  } = useVoiceInput(handleVoiceResult);
+  // product+profile을 Whisper STT 힌트로 전달 — 상품명·고객 맥락으로 오인식 방지
+  } = useVoiceInput(handleVoiceResult, [product, profile].filter(Boolean).join('. '));
 
   const toggleMic = useCallback(() => {
     stopSpeaking();

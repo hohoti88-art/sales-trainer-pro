@@ -92,7 +92,17 @@ ${historyText}
 
 위 구조를 그대로 따르되 실제 분석 내용으로 채워서 반환하세요.`;
 
-  const data = await callProxy({ action: 'generate', prompt });
+  // Gemini 500 간헐적 서버 오류 대응 — 최대 2회 재시도
+  let data;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      data = await callProxy({ action: 'generate', prompt });
+      break;
+    } catch (e) {
+      if (attempt === 2) throw e;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
   let text = data.text.trim()
     .replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
 

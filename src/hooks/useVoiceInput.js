@@ -51,7 +51,7 @@ function blobToBase64(blob) {
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
-export function useVoiceInput(onResult) {
+export function useVoiceInput(onResult, sttContext = '') {
   const [isListening,    setIsListening]    = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [liveText,       setLiveText]       = useState('');
@@ -59,7 +59,9 @@ export function useVoiceInput(onResult) {
   const activeRef      = useRef(false);
   const pausedRef      = useRef(false);
   const onResultRef    = useRef(onResult);
+  const sttContextRef  = useRef(sttContext);
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
+  useEffect(() => { sttContextRef.current = sttContext; }, [sttContext]);
 
   // ── Shared audio refs ─────────────────────────────────────────────────────
   const streamRef         = useRef(null);
@@ -160,7 +162,7 @@ export function useVoiceInput(onResult) {
         const res = await fetch('/api/stt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ audio: base64, mimeType, contextPrompt: '' }),
+          body: JSON.stringify({ audio: base64, mimeType, contextPrompt: sttContextRef.current }),
         });
         if (!res.ok) throw new Error(`STT ${res.status}`);
         const { text } = await res.json();
@@ -375,7 +377,7 @@ export function useVoiceInput(onResult) {
         const res = await fetch('/api/stt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ audio: base64, mimeType, contextPrompt: '' }),
+          body: JSON.stringify({ audio: base64, mimeType, contextPrompt: sttContextRef.current }),
         });
         if (!res.ok) throw new Error(`STT ${res.status}`);
         const { text } = await res.json();

@@ -4,7 +4,7 @@ import NavBar from '../NavBar';
 import FeedbackModal from '../FeedbackModal';
 import { generateCallScript, startPersonaChat, generateFeedback } from '../../services/geminiService';
 import { useVoiceChat } from '../../hooks/useVoiceChat';
-import { playRingTone, unlockAudio } from '../../services/ttsService';
+import { playRingTone, unlockAudio, blockTts, unblockTts } from '../../services/ttsService';
 import { MicButton, SendButton, TtsButton, Bubble, ThinkingBubble } from '../menu1/SpeechPractice';
 
 const PERSONALITIES = ['까다로운형', '바쁜형', '친절한형', '의심형', '직접입력'];
@@ -85,6 +85,7 @@ export default function CallPractice() {
   }
 
   async function handleStartCall() {
+    unblockTts();
     unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
     startMic(); // 제스처 컨텍스트 내 AudioContext 초기화 (모바일 VAD용)
     pauseMic(); // 전화벨/API 로딩 중 ambient noise 차단
@@ -107,6 +108,7 @@ export default function CallPractice() {
   }
 
   async function handleFeedback() {
+    blockTts();
     stopMic();
     setFeedbackLoading(true);
     setShowFeedback(true);

@@ -214,7 +214,7 @@ export function speak(text, personality = '친절한형', profile = '', onEnd = 
 
   let ended = false;
   const safeEnd = () => {
-    if (ended || myGen !== _speakGen) return; // 중단됐거나 새 speak()로 교체된 경우 무시
+    if (ended || _ttsBlocked || myGen !== _speakGen) return; // 차단됐거나 교체된 경우 무시
     ended = true;
     _isSpeaking = false;
     if (onEnd) onEnd();

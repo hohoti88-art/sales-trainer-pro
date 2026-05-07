@@ -21,6 +21,16 @@ export function getIsSpeaking() { return _isSpeaking; }
 // 세대 불일치 체크로 이 경로 전체를 차단한다.
 let _speakGen = 0;
 
+// ── TTS 차단 플래그 ─────────────────────────────────────────
+// blockTts() 호출 후 speak()는 즉시 return — 세대·타이밍과 무관한 하드 차단.
+// unblockTts()로 해제. 피드백 버튼 → blockTts(), 새 대화 시작 → unblockTts().
+let _ttsBlocked = false;
+export function blockTts() {
+  _ttsBlocked = true;
+  stopSpeaking(); // 현재 재생 중인 TTS도 중단
+}
+export function unblockTts() { _ttsBlocked = false; }
+
 // <audio> element — plays through OS audio output pipeline.
 // The browser's AEC (Acoustic Echo Cancellation) uses the OS output as its reference
 // signal, so SpeechRecognition mic input is automatically subtracted from this audio.
@@ -197,8 +207,9 @@ function speakWebSpeech(cleaned, personality, gender, safeEnd, isCancelled) {
 
 // ── 공개 API ─────────────────────────────────────────────
 export function speak(text, personality = '친절한형', profile = '', onEnd = null) {
+  if (_ttsBlocked) return; // 하드 차단 — blockTts() 이후 어떤 TTS도 실행 불가
   const myGen = ++_speakGen; // 이 speak() 호출 고유 세대 — stopSpeaking() 시 무효화됨
-  const isCancelled = () => myGen !== _speakGen;
+  const isCancelled = () => _ttsBlocked || myGen !== _speakGen;
   _isSpeaking = true;
 
   let ended = false;

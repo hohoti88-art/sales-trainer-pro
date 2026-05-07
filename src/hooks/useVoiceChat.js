@@ -153,7 +153,6 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   // stopMic은 TTS도 함께 중단 (피드백 버튼 등 대화 완전 종료 시 사용)
   const stopMicAndTts = useCallback(() => {
     clearTimeout(speakResumeTimerRef.current); // 300ms 예약 speak() 호출도 취소
-    processingRef.current = false; // 진행 중인 sendMessage 잠금 즉시 해제 (피드백 후 새 대화 가능)
     stopSpeaking();
     stopMic();
   }, [stopMic]);

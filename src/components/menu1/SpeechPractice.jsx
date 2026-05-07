@@ -4,7 +4,7 @@ import NavBar from '../NavBar';
 import FeedbackModal from '../FeedbackModal';
 import { startPersonaChat, generateFeedback } from '../../services/geminiService';
 import { useVoiceChat } from '../../hooks/useVoiceChat';
-import { speak, unlockAudio } from '../../services/ttsService';
+import { speak, unlockAudio, blockTts, unblockTts } from '../../services/ttsService';
 
 const PERSONALITIES = ['까다로운형', '바쁜형', '친절한형', '의심형', '직접입력'];
 const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -59,6 +59,7 @@ export default function SpeechPractice() {
       setStartError('판매 상품명과 고객 프로필을 입력해주세요.');
       return;
     }
+    unblockTts(); // 새 대화 시작 — TTS 차단 해제
     unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
     startMic(); // 제스처 컨텍스트 내 AudioContext 초기화 (모바일 VAD용)
     pauseMic(); // API 로딩 중 ambient noise가 메시지로 전송되는 것을 차단
@@ -81,6 +82,7 @@ export default function SpeechPractice() {
   }
 
   async function handleFeedback() {
+    blockTts(); // 즉시 하드 차단 — stopMic()보다 먼저 실행해 TTS 재발 원천 봉쇄
     stopMic();
     setFeedbackLoading(true);
     setShowFeedback(true);

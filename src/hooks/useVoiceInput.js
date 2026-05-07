@@ -167,7 +167,8 @@ export function useVoiceInput(onResult, sttContext = '') {
         if (!res.ok) throw new Error(`STT ${res.status}`);
         const { text } = await res.json();
         setLiveText('');
-        if (text?.trim()) onResultRef.current?.(text.trim());
+        // stopMic() 이후 activeRef=false → onResult 차단 (Whisper 완료가 새 AI 대화를 트리거하지 않도록)
+        if (activeRef.current && text?.trim()) onResultRef.current?.(text.trim());
       } catch {
         setLiveText('');
       } finally {
@@ -379,7 +380,8 @@ export function useVoiceInput(onResult, sttContext = '') {
       isCapturingRef.current = false;
       audioChunksRef.current = [];
       setLiveText('');
-      if (fallbackText) onResultRef.current?.(fallbackText);
+      // stopMic() 이후 activeRef=false → onResult 차단
+      if (activeRef.current && fallbackText) onResultRef.current?.(fallbackText);
       return;
     }
 
@@ -402,10 +404,11 @@ export function useVoiceInput(onResult, sttContext = '') {
         if (!res.ok) throw new Error(`STT ${res.status}`);
         const { text } = await res.json();
         setLiveText('');
-        onResultRef.current?.(text?.trim() || fallbackText || '');
+        // stopMic() 이후 activeRef=false → onResult 차단 (Whisper 완료가 새 AI 대화를 트리거하지 않도록)
+        if (activeRef.current) onResultRef.current?.(text?.trim() || fallbackText || '');
       } catch {
         setLiveText('');
-        if (fallbackText) onResultRef.current?.(fallbackText);
+        if (activeRef.current && fallbackText) onResultRef.current?.(fallbackText);
       } finally {
         isTranscribingRef.current = false;
         setIsTranscribing(false);

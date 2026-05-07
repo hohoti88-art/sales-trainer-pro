@@ -51,7 +51,7 @@ function cleanText(text) {
 }
 
 // ── Azure TTS ─────────────────────────────────────────────
-async function speakAzure(cleaned, gender, safeEnd) {
+async function speakAzure(cleaned, gender, safeEnd, isCancelled) {
   const res = await fetch('/api/tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -59,6 +59,9 @@ async function speakAzure(cleaned, gender, safeEnd) {
   });
   if (!res.ok) throw new Error(`azure ${res.status}`);
   const { audio } = await res.json();
+
+  // fetch 완료 후 재생 전에 취소 확인 — fetch 중 stopSpeaking() 호출 시 오디오 재생 자체를 막음
+  if (isCancelled()) throw new Error('cancelled');
 
   const bytes = Uint8Array.from(atob(audio), c => c.charCodeAt(0));
   const blob = new Blob([bytes], { type: 'audio/mpeg' });
@@ -99,7 +102,7 @@ function getKoreanVoice(gender) {
   return neuralVoices[0] || koVoices[0];
 }
 
-function speakWebSpeech(cleaned, personality, gender, safeEnd) {
+function speakWebSpeech(cleaned, personality, gender, safeEnd, isCancelled) {
   if (!window.speechSynthesis) { safeEnd(); return; }
   window.speechSynthesis.cancel();
 
@@ -130,6 +133,7 @@ function speakWebSpeech(cleaned, personality, gender, safeEnd) {
   utterance.onerror = () => { clearTimeout(fallbackTimer); safeEnd(); };
 
   const doSpeak = () => {
+    if (isCancelled && isCancelled()) { clearTimeout(fallbackTimer); return; }
     const voice = getKoreanVoice(gender);
     if (voice) utterance.voice = voice;
     try { window.speechSynthesis.speak(utterance); } catch { clearTimeout(fallbackTimer); safeEnd(); return; }
@@ -161,6 +165,7 @@ function speakWebSpeech(cleaned, personality, gender, safeEnd) {
 // ── 공개 API ─────────────────────────────────────────────
 export function speak(text, personality = '친절한형', profile = '', onEnd = null) {
   const myGen = ++_speakGen; // 이 speak() 호출 고유 세대 — stopSpeaking() 시 무효화됨
+  const isCancelled = () => myGen !== _speakGen;
   _isSpeaking = true;
 
   let ended = false;
@@ -176,9 +181,9 @@ export function speak(text, personality = '친절한형', profile = '', onEnd = 
 
   const gender = detectGender(profile);
 
-  speakAzure(cleaned, gender, safeEnd).catch(() => {
-    if (myGen !== _speakGen) return; // stopSpeaking() 이후 WebSpeech 폴백 차단
-    speakWebSpeech(cleaned, personality, gender, safeEnd);
+  speakAzure(cleaned, gender, safeEnd, isCancelled).catch(() => {
+    if (isCancelled()) return; // stopSpeaking() 이후 WebSpeech 폴백 차단
+    speakWebSpeech(cleaned, personality, gender, safeEnd, isCancelled);
   });
 }
 

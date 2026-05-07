@@ -314,6 +314,23 @@ export function useVoiceInput(onResult, sttContext = '') {
     };
   }, [stopVADLoop]);
 
+  // PC: 언마운트 시 SpeechRecognition + MediaRecorder 정리
+  // 페이지 전환 시 이전 SR이 살아있으면 새 SR과 마이크를 공유해 충돌 가능
+  useEffect(() => {
+    if (isMobileDevice) return;
+    return () => {
+      clearTimeout(submitTimerRef.current);
+      generationRef.current++;
+      activeRef.current = pausedRef.current = false;
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
+      const rec = recorderRef.current;
+      if (rec && rec.state !== 'inactive') { rec.onstop = null; rec.stop(); }
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    };
+  }, []);
+
   // ══════════════════════════════════════════════════════════════════════════
   // PC PATH: SpeechRecognition (continuous) + MediaRecorder → Whisper
   // ══════════════════════════════════════════════════════════════════════════
@@ -545,6 +562,9 @@ export function useVoiceInput(onResult, sttContext = '') {
     activeRef.current = true;
     pausedRef.current = false;
     if (!recognitionRef.current) createAndStartPC();
+    // pausePC/startCapturePC 비동기 경쟁으로 남아있을 수 있는 stale 청크 제거 후 재녹음
+    audioChunksRef.current = [];
+    isCapturingRef.current = false;
     startCapturePC();
   }, [createAndStartPC, startCapturePC]);
 

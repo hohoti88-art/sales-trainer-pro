@@ -19,6 +19,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   const sendMessageRef = useRef(null);
   const processingRef = useRef(false); // 동시 sendMessage 호출 차단 (React state보다 빠른 동기 가드)
   const processingTimeoutRef = useRef(null); // 안전 타임아웃 핸들
+  const speakResumeTimerRef = useRef(null); // speakThenResume 내 300ms 예약 핸들 — 피드백 등 중단 시 취소용
 
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
 
@@ -61,7 +62,8 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   function speakThenResume(text) {
     if (ttsEnabledRef.current) {
       pauseMic(); // block mic results during TTS (recognition keeps running)
-      setTimeout(() => speak(text, personality, profile, () => {
+      clearTimeout(speakResumeTimerRef.current);
+      speakResumeTimerRef.current = setTimeout(() => speak(text, personality, profile, () => {
         if (isMobileDevice) {
           const pollAndResume = () => {
             if (getIsSpeaking()) {
@@ -144,6 +146,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
 
   // stopMic은 TTS도 함께 중단 (피드백 버튼 등 대화 완전 종료 시 사용)
   const stopMicAndTts = useCallback(() => {
+    clearTimeout(speakResumeTimerRef.current); // 300ms 예약 speak() 호출도 취소
     stopSpeaking();
     stopMic();
   }, [stopMic]);

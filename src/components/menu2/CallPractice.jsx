@@ -87,8 +87,14 @@ export default function CallPractice() {
   async function handleStartCall() {
     unblockTts();
     unlockAudio(); // 사용자 제스처 시점에 오디오 잠금 해제
-    startMic(); // 제스처 컨텍스트 내 AudioContext 초기화 (모바일 VAD용)
-    pauseMic(); // 전화벨/API 로딩 중 ambient noise 차단
+    if (isMobileDevice) {
+      // 모바일: 사용자 제스처 컨텍스트 내 AudioContext 초기화 필수 (iOS 잠금 해제)
+      startMic();
+      pauseMic(); // 벨소리/API 로딩 중 VAD 차단
+    }
+    // PC: startMic()을 벨소리 콜백 안으로 이동 —
+    // 벨소리 1300ms 동안 SR이 실행되면 no-speech 타임아웃으로 자동 종료 후
+    // resumePC()에서 재시작 실패(activeRef=false)하는 문제 방지
     setStartLoading(true);
     try {
       const chat = await startPersonaChat(form.product, form.profile + ' (1~2문장으로 짧게 응답)', personality, form.painPoints, 'call');
@@ -98,8 +104,11 @@ export default function CallPractice() {
       const aiText = result.response.text();
       setMessages([{ role: 'model', text: aiText }]);
       setStep('call');
-      // 전화벨 2번 → 고객 첫마디 → TTS ON: 재생 후 마이크 / OFF: 즉시 마이크 활성화
-      playRingTone(() => speakThenResume(aiText));
+      // 전화벨 종료 후 마이크 시작 → TTS ON: 재생 후 마이크 / OFF: 즉시 마이크 활성화
+      playRingTone(() => {
+        if (!isMobileDevice) startMic(); // PC: 벨소리 종료 직후 SR 시작 (짧은 TTS 구간만 pause)
+        speakThenResume(aiText);
+      });
     } catch (e) {
       setStartError(e.message);
     } finally {

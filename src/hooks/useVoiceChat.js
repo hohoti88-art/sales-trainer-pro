@@ -31,7 +31,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   }, []);
 
   const {
-    isListening, liveText,
+    isListening, liveText, isActive,
     toggle: _toggleMic,
     start: startMic,
     stop: stopMic,
@@ -63,20 +63,26 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
     if (ttsEnabledRef.current) {
       pauseMic(); // block mic results during TTS (recognition keeps running)
       clearTimeout(speakResumeTimerRef.current);
-      speakResumeTimerRef.current = setTimeout(() => speak(text, personality, profile, () => {
-        if (isMobileDevice) {
-          const pollAndResume = () => {
-            if (getIsSpeaking()) {
-              setTimeout(pollAndResume, 300);
-            } else {
-              setTimeout(resumeMic, 200);
-            }
-          };
-          setTimeout(pollAndResume, 100);
-        } else {
-          setTimeout(resumeMic, 800);
-        }
-      }), 300);
+      speakResumeTimerRef.current = setTimeout(() => {
+        // 피드백 버튼 등으로 대화가 중단된 경우 TTS 재생 자체를 차단
+        if (!isActive()) return;
+        speak(text, personality, profile, () => {
+          // TTS 종료 시점에 대화가 여전히 활성 상태인지 재확인
+          if (!isActive()) return;
+          if (isMobileDevice) {
+            const pollAndResume = () => {
+              if (getIsSpeaking()) {
+                setTimeout(pollAndResume, 300);
+              } else {
+                setTimeout(resumeMic, 200);
+              }
+            };
+            setTimeout(pollAndResume, 100);
+          } else {
+            setTimeout(resumeMic, 800);
+          }
+        });
+      }, 300);
     } else {
       resumeMic();
     }
@@ -147,6 +153,7 @@ export function useVoiceChat({ chatRef, product, profile, personality, ttsStorag
   // stopMic은 TTS도 함께 중단 (피드백 버튼 등 대화 완전 종료 시 사용)
   const stopMicAndTts = useCallback(() => {
     clearTimeout(speakResumeTimerRef.current); // 300ms 예약 speak() 호출도 취소
+    processingRef.current = false; // 진행 중인 sendMessage 잠금 즉시 해제 (피드백 후 새 대화 가능)
     stopSpeaking();
     stopMic();
   }, [stopMic]);

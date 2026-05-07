@@ -292,6 +292,7 @@ export function useVoiceInput(onResult, sttContext = '') {
     isCapturingRef.current = false;
     audioChunksRef.current = [];
     setLiveText('');
+    setIsListening(false); // TTS 재생 중 녹음 버튼 비활성화 표시
   }, []);
 
   const resumeMobile = useCallback(() => {
@@ -301,6 +302,7 @@ export function useVoiceInput(onResult, sttContext = '') {
     isSpeakingVAD.current = false;
     startVADLoop();
     startMobileRecorder(); // TTS 끝나자마자 녹음 시작 — 첫 단어 잘림 방지
+    setIsListening(true); // TTS 종료 후 녹음 버튼 다시 활성화
   }, [startVADLoop, startMobileRecorder]);
 
   // 컴포넌트 언마운트 시 오디오 리소스 정리
@@ -556,19 +558,25 @@ export function useVoiceInput(onResult, sttContext = '') {
     pausedRef.current = true;
     cancelCapturePC();
     setLiveText('');
+    setIsListening(false); // TTS 재생 중 녹음 버튼 비활성화 표시
   }, [cancelCapturePC]);
 
   const resumePC = useCallback(() => {
-    // stopPC() 이후 상태: activeRef=false, pausedRef=false — 완전 중단이므로 재개 불가
-    // pausePC() 이후 상태: activeRef=true, pausedRef=true — 재개 정상
-    if (!activeRef.current && !pausedRef.current) return;
+    // activeRef=false면 stopPC() 이후 완전 중단 상태 — 재개 불가
+    // (stopPC() → activeRef=false,pausedRef=false, 이후 pausePC() → pausedRef=true 로 변해도 차단)
+    if (!activeRef.current) return;
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     lastResumeTimeRef.current = Date.now();
     activeRef.current = true;
     pausedRef.current = false;
-    if (!recognitionRef.current) createAndStartPC();
-    // pausePC/startCapturePC 비동기 경쟁으로 남아있을 수 있는 stale 청크 제거 후 재녹음
+    // TTS 일시정지 중 SR이 에코 오디오를 내부 버퍼에 쌓을 수 있음 — 항상 SR 재시작으로 초기화
+    if (recognitionRef.current) {
+      generationRef.current++; // 구 SR의 onend/onresult 무효화
+      try { recognitionRef.current.stop(); } catch {}
+      recognitionRef.current = null;
+    }
+    createAndStartPC(); // 항상 새 SR 생성 (에코 버퍼 없는 깨끗한 상태)
     audioChunksRef.current = [];
     isCapturingRef.current = false;
     startCapturePC();
@@ -581,6 +589,7 @@ export function useVoiceInput(onResult, sttContext = '') {
   if (isMobileDevice) {
     return {
       isListening: isListening || isTranscribing,
+      isActive: () => activeRef.current,
       liveText,
       toggle: () => { if (activeRef.current) stopMobile(); else startMobile(); },
       start:  startMobile,
@@ -592,6 +601,7 @@ export function useVoiceInput(onResult, sttContext = '') {
 
   return {
     isListening: isListening || isTranscribing,
+    isActive: () => activeRef.current,
     liveText,
     toggle: () => { if (activeRef.current) stopPC(); else startPC(); },
     start:  startPC,

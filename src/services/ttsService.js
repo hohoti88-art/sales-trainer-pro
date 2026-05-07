@@ -14,6 +14,13 @@ const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 let _isSpeaking = false;
 export function getIsSpeaking() { return _isSpeaking; }
 
+// ── 세대 카운터 ────────────────────────────────────────────
+// stopSpeaking() 호출 시 증가 → 이전 speak() 인스턴스의 safeEnd/폴백을 무효화.
+// el.src='' 이 onerror를 유발하면 speakAzure가 reject → .catch()에서 WebSpeech 폴백 실행 →
+// WebSpeech가 AI 대사를 다시 재생 → resumeMic() 호출 → SR이 WebSpeech를 사용자 입력으로 인식.
+// 세대 불일치 체크로 이 경로 전체를 차단한다.
+let _speakGen = 0;
+
 // <audio> element — plays through OS audio output pipeline.
 // The browser's AEC (Acoustic Echo Cancellation) uses the OS output as its reference
 // signal, so SpeechRecognition mic input is automatically subtracted from this audio.
@@ -153,13 +160,14 @@ function speakWebSpeech(cleaned, personality, gender, safeEnd) {
 
 // ── 공개 API ─────────────────────────────────────────────
 export function speak(text, personality = '친절한형', profile = '', onEnd = null) {
-  _isSpeaking = true; // 재생 시작 마킹
+  const myGen = ++_speakGen; // 이 speak() 호출 고유 세대 — stopSpeaking() 시 무효화됨
+  _isSpeaking = true;
 
   let ended = false;
   const safeEnd = () => {
-    if (ended) return;
+    if (ended || myGen !== _speakGen) return; // 중단됐거나 새 speak()로 교체된 경우 무시
     ended = true;
-    _isSpeaking = false; // 재생 완료 마킹 — useVoiceChat 폴링이 이 값을 확인
+    _isSpeaking = false;
     if (onEnd) onEnd();
   };
 
@@ -169,12 +177,14 @@ export function speak(text, personality = '친절한형', profile = '', onEnd = 
   const gender = detectGender(profile);
 
   speakAzure(cleaned, gender, safeEnd).catch(() => {
+    if (myGen !== _speakGen) return; // stopSpeaking() 이후 WebSpeech 폴백 차단
     speakWebSpeech(cleaned, personality, gender, safeEnd);
   });
 }
 
 export function stopSpeaking() {
-  _isSpeaking = false; // 강제 중단 시 즉시 초기화
+  _speakGen++; // 현재 speak() 무효화 — safeEnd와 WebSpeech 폴백이 onEnd를 호출하지 못하게 함
+  _isSpeaking = false;
   if (currentAudioEl) {
     currentAudioEl.pause();
     currentAudioEl.src = '';

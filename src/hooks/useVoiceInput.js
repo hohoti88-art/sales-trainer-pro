@@ -556,6 +556,9 @@ export function useVoiceInput(onResult, sttContext = '') {
   }, [cancelCapturePC]);
 
   const resumePC = useCallback(() => {
+    // stopPC() 이후 상태: activeRef=false, pausedRef=false — 완전 중단이므로 재개 불가
+    // pausePC() 이후 상태: activeRef=true, pausedRef=true — 재개 정상
+    if (!activeRef.current && !pausedRef.current) return;
     clearTimeout(submitTimerRef.current);
     accumulatedRef.current = latestInterimRef.current = lastAddedTextRef.current = '';
     lastResumeTimeRef.current = Date.now();

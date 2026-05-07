@@ -27,6 +27,11 @@ let _speakGen = 0;
 // AudioContext.createBufferSource() can bypass that reference → echo. <audio> does not.
 let currentAudioEl = null;
 
+// AbortController — fetch 취소 + 오디오 재생 중단용.
+// stopSpeaking()에서 controller.abort() → fetch는 AbortError, 오디오는 abort 이벤트로 처리.
+// abort 시 Promise를 resolve()로 종료 → speakAzure가 .reject하지 않아 .catch() 미발동 → WebSpeech 폴백 불가.
+let currentAbortController = null;
+
 function detectGender(profile) {
   if (!profile) return null;
   if (/남성|남자/.test(profile)) return 'male';
@@ -52,36 +57,64 @@ function cleanText(text) {
 
 // ── Azure TTS ─────────────────────────────────────────────
 async function speakAzure(cleaned, gender, safeEnd, isCancelled) {
-  const res = await fetch('/api/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: cleaned, gender }),
-  });
-  if (!res.ok) throw new Error(`azure ${res.status}`);
-  const { audio } = await res.json();
+  const controller = new AbortController();
+  currentAbortController = controller;
 
-  // fetch 완료 후 재생 전에 취소 확인 — fetch 중 stopSpeaking() 호출 시 오디오 재생 자체를 막음
-  if (isCancelled()) throw new Error('cancelled');
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: cleaned, gender }),
+      signal: controller.signal, // fetch 취소용
+    });
+    if (!res.ok) throw new Error(`azure ${res.status}`);
+    const { audio } = await res.json();
 
-  const bytes = Uint8Array.from(atob(audio), c => c.charCodeAt(0));
-  const blob = new Blob([bytes], { type: 'audio/mpeg' });
-  const url = URL.createObjectURL(blob);
+    if (isCancelled()) throw new Error('cancelled');
 
-  if (currentAudioEl) { currentAudioEl.pause(); currentAudioEl.src = ''; }
-  const el = new Audio(url);
-  currentAudioEl = el;
+    const bytes = Uint8Array.from(atob(audio), c => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: 'audio/mpeg' });
+    const url = URL.createObjectURL(blob);
 
-  await new Promise((resolve, reject) => {
-    const cleanup = () => {
-      URL.revokeObjectURL(url);
-      if (currentAudioEl === el) currentAudioEl = null;
-    };
-    // 60s hard cap — should never fire for normal TTS but prevents zombie promises
-    const fallback = setTimeout(() => { cleanup(); safeEnd(); resolve(); }, 60000);
-    el.onended = () => { clearTimeout(fallback); cleanup(); safeEnd(); resolve(); };
-    el.onerror = () => { clearTimeout(fallback); cleanup(); reject(new Error('audio error')); };
-    el.play().catch(reject);
-  });
+    if (currentAudioEl) { currentAudioEl.pause(); currentAudioEl = null; }
+    const el = new Audio(url);
+    currentAudioEl = el;
+
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        URL.revokeObjectURL(url);
+        if (currentAudioEl === el) currentAudioEl = null;
+      };
+      const fallback = setTimeout(() => { cleanup(); safeEnd(); resolve(); }, 60000);
+
+      // abort 이벤트: resolve()로 종료 → .catch() 미발동 → WebSpeech 폴백 경로 완전 차단
+      const onAbort = () => {
+        clearTimeout(fallback);
+        el.pause();
+        cleanup();
+        resolve();
+      };
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+
+      el.onended = () => {
+        clearTimeout(fallback);
+        controller.signal.removeEventListener('abort', onAbort);
+        cleanup();
+        safeEnd();
+        resolve();
+      };
+      // 실제 오디오 오류(재생 실패)만 reject → 정당한 Azure 실패 시에만 WebSpeech 폴백
+      el.onerror = () => {
+        clearTimeout(fallback);
+        controller.signal.removeEventListener('abort', onAbort);
+        cleanup();
+        reject(new Error('audio error'));
+      };
+      el.play().catch(reject);
+    });
+  } finally {
+    if (currentAbortController === controller) currentAbortController = null;
+  }
 }
 
 // ── Web Speech API (폴백) ─────────────────────────────────
@@ -188,11 +221,16 @@ export function speak(text, personality = '친절한형', profile = '', onEnd = 
 }
 
 export function stopSpeaking() {
-  _speakGen++; // 현재 speak() 무효화 — safeEnd와 WebSpeech 폴백이 onEnd를 호출하지 못하게 함
+  _speakGen++; // 현재 speak() 무효화
   _isSpeaking = false;
+  // abort() → fetch는 AbortError, 오디오는 onAbort → resolve() (reject 아님) → .catch() 미발동
+  if (currentAbortController) {
+    currentAbortController.abort(); // onAbort 동기 실행 → el.pause() + currentAudioEl=null
+    currentAbortController = null;
+  }
+  // 폴백: abort 이전에 생성된 el이 남아있는 경우 (src='' 제거 — onerror 유발해 WebSpeech 폴백 트리거 방지)
   if (currentAudioEl) {
     currentAudioEl.pause();
-    currentAudioEl.src = '';
     currentAudioEl = null;
   }
   window.speechSynthesis?.cancel();
